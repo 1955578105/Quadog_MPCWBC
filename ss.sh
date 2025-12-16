@@ -1,0 +1,1 @@
+cd /home/mujoco/mujoco-3.3.0-linux-x86_64/mujoco-3.3.0/bin && ./simulate /home/Quadog-MPCWBC/Mymujoco/unitree_mujoco/unitree_robots/go2/scene_terrain.xml
