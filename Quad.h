@@ -17,6 +17,12 @@ namespace Quad
   inline constexpr float l1 = 0.0955f;
   inline constexpr float l2 = 0.213f;
   inline constexpr float l3 = 0.213f;
+
+  namespace PDcontrol
+  {
+
+  };
+
   namespace FSM
   {
     enum FSMstate

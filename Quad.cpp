@@ -3,6 +3,10 @@
 namespace Quad
 {
 
+  namespace PDcontrol
+  {
+
+  };
   //   有限状态机
   //   1.状态：  下蹲 站立 行走（包括trot walk等）
   //   2.用矩阵表示 状态转换关系
@@ -207,13 +211,12 @@ namespace Quad
 
       for (int i = 0; i < 3; i++)
       {
+        // 无论支撑腿还是摆动腿 都要更新  质心触地位置 和 偏航角
+        Pcomtouch[i] = KF::pcom + KF::B2W * KeyboardIns::dVb * ((1 - tsw[i]) * swperiod);
+        FaiZtouch[i] = KF::Faiz + KeyboardIns::dWzb * ((1 - tsw[i]) * swperiod);
 
-        if (sFai[i] == 0) // 当前腿为摆动腿才会更新  变成支撑腿时  落足点已经确定而且不会更新了
+        if (sFai[i] == 1) // 支撑腿一直更新目标落足点 直到支撑的最后一刻落足点确定，不再更新
         {
-          // 某个腿为摆动腿时  计算落足时的质心位置 和 偏航角
-          // 当 摆动进度 进度为1时 才是真正的质心位置和偏航角
-          Pcomtouch[i] = KF::pcom + KF::B2W * KeyboardIns::dVb * ((1 - tsw[i]) * swperiod);
-          FaiZtouch[i] = KF::Faiz + KeyboardIns::dWzb * ((1 - tsw[i]) * swperiod);
 
           // 世界坐标系下的每个足的对称点坐标
           /// @note  足底轨迹规划
@@ -225,6 +228,9 @@ namespace Quad
           // 最终的落足点坐标
           Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
           Pswend[i][2] = A[0] + A[1] * (Pswend[i][0]) + A[2] * (Pswend[i][1]);
+        }
+        else // 摆动腿 根据 终点和起点进行轨迹规划
+        {
         }
       }
     }

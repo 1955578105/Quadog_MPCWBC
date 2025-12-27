@@ -14,4 +14,28 @@ R = [
     头文件中的inline变量 永远只有一个实体 没有副本
 
 
-5.  后期完善 数据可视化  和 定时器 多线程
+5.  后期完善 数据可视化  和  多线程
+#include <chrono>
+#include <thread>
+
+void control_thread() {
+    using namespace std::chrono;
+    // 获取当前时间作为起点
+    auto next_wakeup = high_resolution_clock::now();
+    
+    while (running) {
+        // 1. 执行控制算法 (MPC/WBC)
+        do_control();
+
+        // 2. 设定下一次唤醒的绝对时间点：精准的 1ms 后
+        next_wakeup += microseconds(1000); 
+        
+        // 3. 睡到那个绝对时间点
+        // 即使 do_control 耗时 0.4ms 或 0.6ms，唤醒时间点永远是固定的
+        std::this_thread::sleep_until(next_wakeup);
+    }
+}
+
+
+
+6.给机械狗设计一个姿态 ： PD控制器 ， 对每一个关节而言  ， 进行多项式插值（机器人学中的方法） ，得到每个时刻的目标位置与速度，可让结果丝滑；
