@@ -1,0 +1,20 @@
+# --- 编译产物（最重要的部分） ---
+build/         # 忽略你之前创建的整个 build 文件夹
+bin/           # 忽略可能生成的二进制目录
+lib/           # 忽略库文件
+*.o            # 忽略目标文件
+*.a            # 忽略静态库
+*.so           # 忽略动态库
+*.exe          # 忽略 Windows 可执行文件
+
+# --- CMake 产生的中间文件 ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# --- IDE/编辑器（如 VS Code） ---
+.vscode/       # 忽略 VS Code 的个人配置
+
+
