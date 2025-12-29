@@ -1,1 +1,1 @@
-controller based on MPC adn WBC 
+Quadruped Robot controller based on MPC adn WBC 
