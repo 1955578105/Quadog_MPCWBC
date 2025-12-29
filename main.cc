@@ -25,7 +25,7 @@
 #include <string>
 #include <thread>
 #include <unistd.h>
-
+#include "qpOASES.hpp"
 #include <mujoco/mujoco.h>
 #include "glfw_adapter.h"
 #include "simulate.h"
@@ -45,10 +45,22 @@ extern "C"
 #include <unistd.h>
 #endif
 }
-
-void myfunction()
+using namespace qpOASES;
+void myfunction(mujoco::Simulate *sim)
 {
+
   // usleep(10000); // Simulate some work
+  // Qproblem qp(10, 20);
+  while (!sim->exitrequest.load())
+  {
+
+    auto enterTime = std::chrono::steady_clock::now();
+    std::cout << "This is my thread function running." << std::endl;
+
+    enterTime += std::chrono::milliseconds(10); // 1khz
+
+    std::this_thread::sleep_until(enterTime);
+  }
 }
 namespace
 {
@@ -466,7 +478,7 @@ namespace
                 // call mj_step
                 mj_step(m, d);
                 //  mufunction_
-                myfunction();
+                //  myfunction();
 
                 const char *message = Diverged(m->opt.disableflags, d);
                 if (message)
@@ -601,12 +613,14 @@ int main(int argc, char **argv)
   //   filename = argv[1];
   // }
 
-  // start physics thread
+  std::thread mythread(myfunction, sim.get());
+  //  start physics thread
   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename);
 
   // start simulation UI loop (blocking call)
   sim->RenderLoop();
   physicsthreadhandle.join();
+  mythread.join();
 
   return 0;
 }

@@ -5,7 +5,12 @@ namespace Quad
 
   namespace PDcontrol
   {
-
+    void PDcontrol(const mjModel *model, const mjData *data, vector<float> torques)
+    {
+      int i = 0;
+      for (auto torque : torques)
+        data->ctrl[i++] = torque;
+    }
   };
   //   有限状态机
   //   1.状态：  下蹲 站立 行走（包括trot walk等）
@@ -193,9 +198,9 @@ namespace Quad
     Vector3f SymPb1, SymPb2, SymPb3, SymPb4;
     vector<Vector3f> SymPb;
     Vector4f FaiZtouch;
-    vector<Vector3f> Pcomtouch, Psymtouch, Pswend;
+    vector<Vector3f> Pcomtouch, Psymtouch, Pswend, P1, P2, P3, P4;
     float kp = 0.15;
-    ; // 对称足底位置的XY坐标向量
+    // 对称足底位置的XY坐标向量
     /// @brief 落足点规划 和 足底轨迹规划
     void FootTraj_Planning()
     {
@@ -227,7 +232,7 @@ namespace Quad
           P4[i] = (KF::pcom[2] / 9.81) * (KF::vcom.cross(KF::B2W * KF::Wb));
           // 最终的落足点坐标
           Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
-          Pswend[i][2] = A[0] + A[1] * (Pswend[i][0]) + A[2] * (Pswend[i][1]);
+          Pswend[i][2] = KeyboardIns::A[0] + KeyboardIns::A[1] * (Pswend[i][0]) + KeyboardIns::A[2] * (Pswend[i][1]);
         }
         else // 摆动腿 根据 终点和起点进行轨迹规划
         {

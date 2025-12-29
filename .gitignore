@@ -13,8 +13,13 @@ CMakeFiles/
 cmake_install.cmake
 Makefile
 compile_commands.json
-
+basic
 # --- IDE/编辑器（如 VS Code） ---
 .vscode/       # 忽略 VS Code 的个人配置
+c_cpp_properties.json
+.idea/         # 如果你用 CLion
+*.swp          # Vim 临时文件
+
+
 
 

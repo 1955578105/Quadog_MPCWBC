@@ -11,7 +11,7 @@ using namespace std;
 using RMT = Matrix3f;
 namespace Quad
 {
-
+  
   inline constexpr float hx = 0.1934f; // 使用 constexpr 表示编译时常量
   inline constexpr float hy = 0.0465f;
   inline constexpr float l1 = 0.0955f;
