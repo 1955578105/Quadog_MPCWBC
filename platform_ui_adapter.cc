@@ -218,7 +218,7 @@ void PlatformUIAdapter::UpdateMjuiState() {
   state_.control = IsCtrlKeyPressed();
   state_.shift = IsShiftKeyPressed();
   state_.alt = IsAltKeyPressed();
-
+  
   // swap left and right if Alt
   if (state_.alt) {
     int tmp = state_.left;

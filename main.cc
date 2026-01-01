@@ -30,7 +30,7 @@
 #include "glfw_adapter.h"
 #include "simulate.h"
 #include "array_safety.h"
-
+#include "Quad.h"
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 
 extern "C"
@@ -46,7 +46,7 @@ extern "C"
 #endif
 }
 using namespace qpOASES;
-void myfunction(mujoco::Simulate *sim)
+void threadMpc(mujoco::Simulate *sim)
 {
 
   // usleep(10000); // Simulate some work
@@ -56,6 +56,9 @@ void myfunction(mujoco::Simulate *sim)
 
     auto enterTime = std::chrono::steady_clock::now();
     std::cout << "This is my thread function running." << std::endl;
+    Quad::ConvexMPC::UpdateState();
+
+    std::cout << Quad::ConvexMPC::Continue_A << std::endl;
 
     enterTime += std::chrono::milliseconds(10); // 1khz
 
@@ -613,7 +616,7 @@ int main(int argc, char **argv)
   //   filename = argv[1];
   // }
 
-  std::thread mythread(myfunction, sim.get());
+  std::thread mythread(threadMpc, sim.get());
   //  start physics thread
   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename);
 

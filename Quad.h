@@ -5,13 +5,15 @@
 #include <mujoco/mjmodel.h>
 #include <mujoco/mujoco.h>
 #include <eigen3/Eigen/Eigen>
+#include <qpOASES.hpp>
 using namespace Eigen;
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Matrix3f;
+
 namespace Quad
 {
-  
+
   inline constexpr float hx = 0.1934f; // 使用 constexpr 表示编译时常量
   inline constexpr float hy = 0.0465f;
   inline constexpr float l1 = 0.0955f;
@@ -58,12 +60,13 @@ namespace Quad
     void UpdateGait();
     void Gait_Init();
     extern Vector3f FrPstend, FlPstend, RrPstend, RlPstend;
+    Matrix3f TF_Z(float dFaiz);
 
     extern Vector3f SymPb1, SymPb2, SymPb3, SymPb4; // 对称足底位置的XY坐标向量
     extern Vector4f FaiZtouch;                      // 触地时间质心位置 和 偏航角
     // 足底触地时间质心位置   足底触地时世界坐标系下的对称点坐标
     extern vector<Vector3f> Pcomtouch, Psymtouch, P1, P2, P3, P4, Pswend;
-
+    extern vector<Vector3f> SwingTrajectory; // 轨迹就是 位置 速度
   };
 
   namespace KF
@@ -101,7 +104,17 @@ namespace Quad
     extern MatrixXf W;                     // 用于坡度估计的矩阵   N_ 是归一化的
     extern VectorXf Z, A, _A, N, N_;
     extern Vector3f Tao, dFai; // dFai  是期望角度向量
-    extern VectorXf desirex;   // 期望状态
+    extern vector<VectorXf> desirex;   // 期望状态
+  };
+
+  namespace ConvexMPC
+  {
+
+    extern MatrixXf Continue_A, Continue_B, A, B;
+    void UpdateState();
+    extern Matrix3f BInertia, PInertia; // 本体系的惯性矩阵 和定向本体系的惯性矩阵
+    extern float h;
+    extern MatrixXf Q,R,Aqp,Bqp,D;
   };
 
 };

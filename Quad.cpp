@@ -1,5 +1,5 @@
 #include "Quad.h"
-
+#define h 10
 namespace Quad
 {
 
@@ -101,7 +101,7 @@ namespace Quad
     // 进入当前步态的持续时间
     float Time = 0;
     // 步态周期
-    float GaitPeriod = 2;
+    float GaitPeriod = 0.5;
 
     // 当前在第几个周期
     unsigned int n;
@@ -200,7 +200,7 @@ namespace Quad
     Vector4f FaiZtouch;
     vector<Vector3f> Pcomtouch, Psymtouch, Pswend, P1, P2, P3, P4;
     float kp = 0.15;
-    // 对称足底位置的XY坐标向量
+    ; // 对称足底位置的XY坐标向量
     /// @brief 落足点规划 和 足底轨迹规划
     void FootTraj_Planning()
     {
@@ -281,7 +281,7 @@ namespace Quad
       float x = Quat[1];
       float y = Quat[2];
       float z = Quat[3];
-      B2W << 1 - 2 * y * -2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
+      B2W << 1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
           2 * x * y + 2 * w * z, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * w * x,
           2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
     }
@@ -493,7 +493,7 @@ namespace Quad
     MatrixXf W(4, 3);
     VectorXf Z(4), A(3), _A(3), N(3), N_(3);
     Vector3f Tao, dFai;
-    VectorXf desirex(13);
+    vector<VectorXf> desirex;
     void Update_ins()
     {
       // 根据键盘更新指令
@@ -509,45 +509,158 @@ namespace Quad
       dWzO = dWzb;
     }
 
-    void Desire_ins_update(float MPCtime)
+    void Desire_ins_update(float MPCtime) // 这个仅能根据当前状态 估计下一次状态  ， 但是需要估计未来多个时间段的状态
     {
-      // 更新期望偏航角
-      dFaiz = dFaiz + dWzO * MPCtime;
-      // 更新期望角速度
-      dWzO = dWzb;
-      // 期望角速度向量
-      dWO << 0, 0, dWzO;
-      dVb << dVxb, dVyb, 0;
-      // Z轴旋转矩阵
-      TFZ << cos(dFaiz), -sin(dFaiz), 0,
-          sin(dFaiz), cos(dFaiz), 0,
-          0, 0, 1;
-      // 更新期望位置
-      dPO = dPO + dVO * MPCtime;
-      dPO[2] = dHb; // 期望机身高度
-      // 更新期望速度
-      dVO = TFZ * dVb;
+      for (int i = 0; i < h; ++i)
+      {
+        // 更新期望偏航角
+        if (i == 0) // 每次第一次 将一些参数设置为当前值
+        {
+          dFaiz = KF::Faiz;
+          // 更新期望角速度
+          dWzO = dWzb;
+          // 期望角速度向量
+          dWO << 0, 0, dWzO;
+          dVb << dVxb, dVyb, 0;
+          // 坡度估计
+          Z << Gait::FrPstend[2], Gait::FlPstend[2], Gait::RrPstend[2], Gait::RlPstend[2];
+          W << 1, Gait::FrPstend[0], Gait::FrPstend[1],
+              1, Gait::FlPstend[0], Gait::FlPstend[1],
+              1, Gait::RrPstend[0], Gait::RrPstend[1],
+              1, Gait::RlPstend[0], Gait::RlPstend[1];
+          _A = A;
+          A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
+          A = 0.2 * A + 0.8 * _A; // 低通滤波
+          N << -A[1], -A[2], 1;
+          // 归一化的法向量
+          N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
+          dPO = KF::X.block(0, 0, 3, 1);
+        }
+        dFaiz = dFaiz + dWzO * MPCtime;
+        // Z轴旋转矩阵
+        TFZ << cos(dFaiz), -sin(dFaiz), 0,
+            sin(dFaiz), cos(dFaiz), 0,
+            0, 0, 1;
+        // 更新期望位置
+        dVO = TFZ * dVb;
+        dPO = dPO + dVO * MPCtime;
+        dPO[2] = dHb; // 期望机身高度
 
-      // 坡度估计
-      Z << Gait::FrPstend[2], Gait::FlPstend[2], Gait::RrPstend[2], Gait::RlPstend[2];
-      W << 1, Gait::FrPstend[0], Gait::FrPstend[1],
-          1, Gait::FlPstend[0], Gait::FlPstend[1],
-          1, Gait::RrPstend[0], Gait::RrPstend[1],
-          1, Gait::RlPstend[0], Gait::RlPstend[1];
-      _A = A;
-      A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
-      A = 0.2 * A + 0.8 * _A; // 低通滤波
-      N << -A[1], -A[2], 1;
-      // 归一化的法向量
-      N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
-      // 计算期望滚摆角
-      Tao = TFZ.inverse() * N_;
-      dFaix = asin(Tao[1]);
-      dFaiy = atan(Tao[0] / Tao[2]);
-      dFai << dFaix, dFaiy, dFaiz;
-      // 更新期望状态向量
-      desirex << dFai, dPO, dWO, dVO, -9.81;
+        // 计算期望滚摆角
+        Tao = TFZ.inverse() * N_;
+        dFaix = asin(Tao[1]);
+        dFaiy = atan(Tao[0] / Tao[2]);
+        dFai << dFaix, dFaiy, dFaiz;
+        // 更新期望状态向量
+        desirex[i] << dFai, dPO, dWO, dVO, -9.81;
+      }
     }
   };
 
+  namespace ConvexMPC
+  {
+
+    MatrixXf Temp_A(13, 13), A(13, 13), Continue_B(13, 13), B(13, 13);
+    Matrix3f BInertia, PInertia;
+    float MPC_T = 0.01;
+    // float h; // mpc预测步长
+    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), Bqp(13 * h, 12 * h), D(13 * h, 1);
+    VectorXf vec(13);
+    MatrixXf temp(13, 13);
+    Matrix3f QUa2Mat(float w, float x, float y, float z)
+    {
+      Matrix3f tran;
+      tran << 1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
+          2 * x * y + 2 * w * z, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * w * x,
+          2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
+      return tran;
+    }
+    void MPC_init()
+    {
+      // 初始化 A的固定值
+      A.setZero();
+      A.setIdentity(13, 13);
+      A.block(3, 9, 3, 3) = Matrix3f::Identity() * MPC_T;
+      A(11, 12) = 1 * MPC_T;
+
+      // 初始化  本体系的惯性矩阵
+      Matrix3f R = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
+      Eigen::Vector3f diaginertia(0.107027, 0.0980771, 0.0244531);
+      Eigen::Matrix3f I_principal = diaginertia.asDiagonal();
+      BInertia = R * I_principal * (R.transpose());
+
+      // 初始化 B 的固定值
+      B.setZero();
+      B.block(9, 0, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 3, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 6, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 9, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
+      // for(int i=0;i<h;i++)
+      vec << 25, 25, 10, 1, 1, 100, 0, 0, 0.3, 0.2, 0.2, 20, 0;
+      temp = vec.asDiagonal();
+      Q.setZero();
+      for (int i = 0; i < h; ++i)
+      {
+        Q.block(i * 13, i * 13, 13, 13) = Q;
+      }
+      R.setZero();
+      R = MatrixXf::Identity(12 * h, 12 * h) * 0.00005;
+      Aqp.setZero();
+      Bqp.setZero();
+      //   h = 50; // 预测步长    预测时域不能超过半个步态周期
+    }
+    void UpdateState()
+    {
+
+      // 更新 Aqp  Bqp   //
+      for (int i = 0; i < h; ++i)
+      {
+        if (i == 0)
+        {
+          Temp_A.setIdentity();
+        }
+        A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[i][2]);
+        Temp_A = A * Temp_A;
+        Aqp.block(13 * i, 0, 13, 13) = (Temp_A);
+      }
+
+      PInertia = KF::B2W * BInertia * (KF::B2W.transpose());
+
+      if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
+      {
+        Continue_B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
+      }
+      else // 支撑腿   用 支撑足  - 质心
+      {
+        Continue_B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
+      }
+
+      if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
+      {
+        Continue_B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
+      }
+      else // 支撑腿   用 支撑足  - 质心
+      {
+        Continue_B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
+      }
+
+      if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
+      {
+        Continue_B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
+      }
+      else // 支撑腿   用 支撑足  - 质心
+      {
+        Continue_B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
+      }
+
+      if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
+      {
+        Continue_B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
+      }
+      else // 支撑腿   用 支撑足  - 质心
+      {
+        Continue_B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
+      }
+    }
+  };
 };
