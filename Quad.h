@@ -14,7 +14,7 @@ using namespace Eigen;
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Matrix3f;
-
+#define h 10
 namespace Quad
 {
 
@@ -110,6 +110,7 @@ namespace Quad
     extern Vector3f Tao, dFai;       // dFai  是期望角度向量
     extern vector<VectorXf> desirex; // 期望状态
     void Update_ins(mujoco::Simulate *sim);
+    MatrixXf D; // 期望轨迹序列
   };
 
   namespace ConvexMPC

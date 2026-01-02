@@ -1,5 +1,5 @@
 #include "Quad.h"
-#define h 10
+
 namespace Quad
 {
 
@@ -494,6 +494,7 @@ namespace Quad
     VectorXf Z(4), A(3), _A(3), N(3), N_(3);
     Vector3f Tao, dFai;
     vector<VectorXf> desirex;
+    MatrixXf D(13*h,1);
     void Update_ins(mujoco::Simulate *sim)
     {
       static auto KeyPressedTime = std::chrono::steady_clock::now();
@@ -631,6 +632,10 @@ namespace Quad
         // 更新期望状态向量
         desirex[i + 1] << dFai, dPO, dWO, dVO, -9.81;
       }
+      for(int i=0;i<h;i++)
+      {
+        D.block(13*h,1,13,1) = desirex[i+1];
+      }
     }
   };
 
@@ -641,7 +646,9 @@ namespace Quad
     Matrix3f BInertia, PInertia;
     float MPC_T = 0.01;
     // float h; // mpc预测步长
-    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h);
+    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), 
+    Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h),g(12*h,1),
+    lb(12*h,1),ub(12*h,1);
     VectorXf vec(13);
     MatrixXf temp(13, 13);
     int nv = 12 * h;
@@ -695,6 +702,9 @@ namespace Quad
       option.setToMPC();
       option.printLevel = qpOASES::PL_NONE;
       solver.setOptions(option);
+      
+      lb.setZero();
+
     }
 
     Matrix3f getRotationMatrix(double psi, double theta, double phi)
@@ -710,7 +720,6 @@ namespace Quad
       // 初始化 3x3 矩阵
       Matrix3f R;
 
-      // 根据图片中给出的最终矩阵公式进行赋值
       // 第一行
       R(0, 0) = c_theta * c_psi;
       R(0, 1) = c_psi * s_phi * s_theta - c_phi * s_psi;
@@ -744,10 +753,7 @@ namespace Quad
       }
 
       for (int i = 0; i < h; i++) // B0 - B9
-      {
-        for (int j = i + 1; j < h + 1; j++)
-        {
-          Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
+      {  Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
           PInertia = Ro * BInertia * (Ro.transpose());
 
           if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
@@ -785,6 +791,9 @@ namespace Quad
           {
             B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
           }
+        for (int j = i + 1; j < h + 1; j++)
+        {
+        
 
           if (j == i + 1)
           {
