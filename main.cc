@@ -31,6 +31,7 @@
 #include "simulate.h"
 #include "array_safety.h"
 #include "Quad.h"
+#include "platform_ui_adapter.h"
 #define MUJOCO_PLUGIN_DIR "mujoco_plugin"
 
 extern "C"
@@ -55,16 +56,18 @@ void threadMpc(mujoco::Simulate *sim)
   {
 
     auto enterTime = std::chrono::steady_clock::now();
-    std::cout << "This is my thread function running." << std::endl;
-    Quad::ConvexMPC::UpdateState();
+    //  std::cout << "This is my thread function running." << std::endl;
+    // Quad::ConvexMPC::UpdateState();
 
-    std::cout << Quad::ConvexMPC::Continue_A << std::endl;
+    // std::cout << Quad::ConvexMPC::Continue_A << std::endl;
+    // 检测按键状态
 
     enterTime += std::chrono::milliseconds(10); // 1khz
 
     std::this_thread::sleep_until(enterTime);
   }
 }
+
 namespace
 {
   namespace mj = ::mujoco;
@@ -616,14 +619,16 @@ int main(int argc, char **argv)
   //   filename = argv[1];
   // }
 
-  std::thread mythread(threadMpc, sim.get());
+  std::thread mpcthread(threadMpc, sim.get());
+  std::thread Keythread(Quad::KeyboardIns::Update_ins, sim.get());
   //  start physics thread
   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename);
 
   // start simulation UI loop (blocking call)
   sim->RenderLoop();
   physicsthreadhandle.join();
-  mythread.join();
+  mpcthread.join();
+  Keythread.join();
 
   return 0;
 }

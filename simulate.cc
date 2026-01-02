@@ -26,7 +26,7 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-
+#include <iostream>
 #include "lodepng.h"
 #include <mujoco/mjdata.h>
 #include <mujoco/mjui.h>

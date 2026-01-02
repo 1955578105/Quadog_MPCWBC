@@ -6,6 +6,10 @@
 #include <mujoco/mujoco.h>
 #include <eigen3/Eigen/Eigen>
 #include <qpOASES.hpp>
+#include "platform_ui_adapter.h"
+#include "simulate.h"
+#include "glfw_adapter.h"
+#include <thread>
 using namespace Eigen;
 using namespace std;
 #include "Self_mujoco_lib.h"
@@ -103,8 +107,9 @@ namespace Quad
     extern Vector3f dPO;                   // 在世界坐标系中的期望质心位置
     extern MatrixXf W;                     // 用于坡度估计的矩阵   N_ 是归一化的
     extern VectorXf Z, A, _A, N, N_;
-    extern Vector3f Tao, dFai; // dFai  是期望角度向量
-    extern vector<VectorXf> desirex;   // 期望状态
+    extern Vector3f Tao, dFai;       // dFai  是期望角度向量
+    extern vector<VectorXf> desirex; // 期望状态
+    void Update_ins(mujoco::Simulate *sim);
   };
 
   namespace ConvexMPC
@@ -114,7 +119,7 @@ namespace Quad
     void UpdateState();
     extern Matrix3f BInertia, PInertia; // 本体系的惯性矩阵 和定向本体系的惯性矩阵
     extern float h;
-    extern MatrixXf Q,R,Aqp,Bqp,D;
+    extern MatrixXf Q, R, Aqp, Bqp, D;
   };
 
 };

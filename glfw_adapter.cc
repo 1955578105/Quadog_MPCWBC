@@ -258,30 +258,30 @@ namespace mujoco
     return Glfw().glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
            Glfw().glfwGetKey(window_, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
   }
-  // 自家=================
-  bool GlfwAdapter::IsQKeyPressed() const
+  // 自加函数=================
+  bool GlfwAdapter::Is1KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_1) == GLFW_PRESS;
   }
-  bool GlfwAdapter::IsWKeyPressed() const
+  bool GlfwAdapter::Is2KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_2) == GLFW_PRESS;
   }
-  bool GlfwAdapter::IsEKeyPressed() const
+  bool GlfwAdapter::Is3KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_3) == GLFW_PRESS;
   }
-  bool GlfwAdapter::IsAKeyPressed() const
+  bool GlfwAdapter::Is4KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_4) == GLFW_PRESS;
   }
-  bool GlfwAdapter::IsSKeyPressed() const
+  bool GlfwAdapter::Is5KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_5) == GLFW_PRESS;
   }
-  bool GlfwAdapter::IsDKeyPressed() const
+  bool GlfwAdapter::Is6KeyPressed() const
   {
-    return Glfw().glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS;
+    return Glfw().glfwGetKey(window_, GLFW_KEY_KP_6) == GLFW_PRESS;
   }
   //
   bool GlfwAdapter::IsMouseButtonDownEvent(int act) const

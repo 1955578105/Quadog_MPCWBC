@@ -494,12 +494,79 @@ namespace Quad
     VectorXf Z(4), A(3), _A(3), N(3), N_(3);
     Vector3f Tao, dFai;
     vector<VectorXf> desirex;
-    void Update_ins()
+    void Update_ins(mujoco::Simulate *sim)
     {
+      static auto KeyPressedTime = std::chrono::steady_clock::now();
+      while (!sim->exitrequest.load())
+      {
+
+        auto enterTime = std::chrono::steady_clock::now();
+
+        // 检测按键状态
+        if (sim->platform_ui->Is1KeyPressed())
+        {
+
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            std::cout << "1 key is pressed" << std::endl;
+            dVyb += 1;
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        if (sim->platform_ui->Is2KeyPressed())
+        {
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            std::cout << "2 key is pressed" << std::endl;
+            dVxb -= 1;
+
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        if (sim->platform_ui->Is3KeyPressed())
+        {
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            std::cout << "3 key is pressed" << std::endl;
+            dVyb -= 1;
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        if (sim->platform_ui->Is4KeyPressed())
+        {
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            std::cout << "4  key is pressed" << std::endl;
+            dWzb += 1;
+
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        if (sim->platform_ui->Is5KeyPressed())
+        {
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            dVxb += 1;
+            std::cout << "5 key is pressed" << std::endl;
+
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        if (sim->platform_ui->Is6KeyPressed())
+        {
+          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
+          {
+            std::cout << "6 key is pressed" << std::endl;
+            dWzb -= 1;
+
+            KeyPressedTime = std::chrono::steady_clock::now();
+          }
+        }
+        enterTime += std::chrono::milliseconds(2); // 1khz
+
+        std::this_thread::sleep_until(enterTime);
+      }
       // 根据键盘更新指令
-      dVxb = 1;
-      dVyb = 1;
-      dWzb = 1;
     }
 
     void Keyboard_init()
@@ -517,11 +584,16 @@ namespace Quad
         if (i == 0) // 每次第一次 将一些参数设置为当前值
         {
           dFaiz = KF::Faiz;
+          TFZ << cos(dFaiz), -sin(dFaiz), 0,
+              sin(dFaiz), cos(dFaiz), 0,
+              0, 0, 1;
           // 更新期望角速度
           dWzO = dWzb;
           // 期望角速度向量
           dWO << 0, 0, dWzO;
           dVb << dVxb, dVyb, 0;
+          dVO = TFZ * dVb;
+
           // 坡度估计
           Z << Gait::FrPstend[2], Gait::FlPstend[2], Gait::RrPstend[2], Gait::RlPstend[2];
           W << 1, Gait::FrPstend[0], Gait::FrPstend[1],
@@ -535,6 +607,11 @@ namespace Quad
           // 归一化的法向量
           N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
           dPO = KF::X.block(0, 0, 3, 1);
+          Tao = TFZ.inverse() * N_;
+          dFaix = asin(Tao[1]);
+          dFaiy = atan(Tao[0] / Tao[2]);
+          dFai << dFaix, dFaiy, dFaiz;
+          desirex[i] << dFai, dPO, dWO, dVO, -9.81; // 此为当前状态
         }
         dFaiz = dFaiz + dWzO * MPCtime;
         // Z轴旋转矩阵
@@ -552,7 +629,7 @@ namespace Quad
         dFaiy = atan(Tao[0] / Tao[2]);
         dFai << dFaix, dFaiy, dFaiz;
         // 更新期望状态向量
-        desirex[i] << dFai, dPO, dWO, dVO, -9.81;
+        desirex[i + 1] << dFai, dPO, dWO, dVO, -9.81;
       }
     }
   };
@@ -564,9 +641,13 @@ namespace Quad
     Matrix3f BInertia, PInertia;
     float MPC_T = 0.01;
     // float h; // mpc预测步长
-    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), Bqp(13 * h, 12 * h), D(13 * h, 1);
+    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h);
     VectorXf vec(13);
     MatrixXf temp(13, 13);
+    int nv = 12 * h;
+    int nc = 20 * h;
+    int nWSR = 100; // 最大工作集切换次数（Working Set Recalculations）
+    qpOASES::QProblem solver(nv, nc);
     Matrix3f QUa2Mat(float w, float x, float y, float z)
     {
       Matrix3f tran;
@@ -608,6 +689,44 @@ namespace Quad
       Aqp.setZero();
       Bqp.setZero();
       //   h = 50; // 预测步长    预测时域不能超过半个步态周期
+      //  调用 qpoases 求解
+
+      qpOASES::Options option;
+      option.setToMPC();
+      option.printLevel = qpOASES::PL_NONE;
+      solver.setOptions(option);
+    }
+
+    Matrix3f getRotationMatrix(double psi, double theta, double phi)
+    {
+      // 预先计算三角函数值
+      double c_psi = std::cos(psi);
+      double s_psi = std::sin(psi);
+      double c_theta = std::cos(theta);
+      double s_theta = std::sin(theta);
+      double c_phi = std::cos(phi);
+      double s_phi = std::sin(phi);
+
+      // 初始化 3x3 矩阵
+      Matrix3f R;
+
+      // 根据图片中给出的最终矩阵公式进行赋值
+      // 第一行
+      R(0, 0) = c_theta * c_psi;
+      R(0, 1) = c_psi * s_phi * s_theta - c_phi * s_psi;
+      R(0, 2) = s_phi * s_psi + c_phi * c_psi * s_theta;
+
+      // 第二行
+      R(1, 0) = c_theta * s_psi;
+      R(1, 1) = c_phi * c_psi + s_phi * s_theta * s_psi;
+      R(1, 2) = c_phi * s_theta * s_psi - c_psi * s_phi;
+
+      // 第三行
+      R(2, 0) = -s_theta;
+      R(2, 1) = c_theta * s_phi;
+      R(2, 2) = c_phi * c_theta;
+
+      return R;
     }
     void UpdateState()
     {
@@ -624,43 +743,61 @@ namespace Quad
         Aqp.block(13 * i, 0, 13, 13) = (Temp_A);
       }
 
-      PInertia = KF::B2W * BInertia * (KF::B2W.transpose());
+      for (int i = 0; i < h; i++) // B0 - B9
+      {
+        for (int j = i + 1; j < h + 1; j++)
+        {
+          Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
+          PInertia = Ro * BInertia * (Ro.transpose());
 
-      if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
-      {
-        Continue_B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
-      }
-      else // 支撑腿   用 支撑足  - 质心
-      {
-        Continue_B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
-      }
+          if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
+          {
+            B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
+          }
+          else // 支撑腿   用 支撑足  - 质心
+          {
+            B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
+          }
 
-      if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
-      {
-        Continue_B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
-      }
-      else // 支撑腿   用 支撑足  - 质心
-      {
-        Continue_B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
-      }
+          if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
+          {
+            B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
+          }
+          else // 支撑腿   用 支撑足  - 质心
+          {
+            B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
+          }
 
-      if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
-      {
-        Continue_B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
-      }
-      else // 支撑腿   用 支撑足  - 质心
-      {
-        Continue_B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
-      }
+          if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
+          {
+            B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
+          }
+          else // 支撑腿   用 支撑足  - 质心
+          {
+            B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
+          }
 
-      if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
-      {
-        Continue_B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
+          if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
+          {
+            B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
+          }
+          else // 支撑腿   用 支撑足  - 质心
+          {
+            B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
+          }
+
+          if (j == i + 1)
+          {
+            Temp_A.setIdentity();
+          }
+          A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[j][2]); // A(i+1)开始
+          Bqp.block((j - 1) * 13, i * 12, 13, 12) = Temp_A * B;
+          Temp_A = A * Temp_A;
+        }
       }
-      else // 支撑腿   用 支撑足  - 质心
-      {
-        Continue_B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
-      }
+      H = 2 * (Bqp.transpose() * Q * Bqp + R);
+      g = 2 * Bqp.transpose() * Q * (Aqp * KeyboardIns::desirex[0] - D);
+      qpOASES::returnValue status = solver.init(H, g, A, lb, ub, lbA, ubA, nWSR);
     }
   };
 };
