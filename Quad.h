@@ -110,7 +110,7 @@ namespace Quad
     extern Vector3f Tao, dFai;       // dFai  是期望角度向量
     extern vector<VectorXf> desirex; // 期望状态
     void Update_ins(mujoco::Simulate *sim);
-    MatrixXf D; // 期望轨迹序列
+    extern MatrixXf D; // 期望轨迹序列
   };
 
   namespace ConvexMPC
@@ -119,7 +119,9 @@ namespace Quad
     extern MatrixXf Continue_A, Continue_B, A, B;
     void UpdateState();
     extern Matrix3f BInertia, PInertia; // 本体系的惯性矩阵 和定向本体系的惯性矩阵
-    extern float h;
+    void MPC_init();
+    Matrix3f QUa2Mat(float w, float x, float y, float z);
+    Matrix3f getRotationMatrix(double psi, double theta, double phi);
     extern MatrixXf Q, R, Aqp, Bqp, D;
   };
 

@@ -214,28 +214,27 @@ namespace Quad
       SymPb.push_back(SymPb3);
       SymPb.push_back(SymPb4);
 
-      for (int i = 0; i < 3; i++)
+      for (int i = 0; i < 4; i++)
       {
         // 无论支撑腿还是摆动腿 都要更新  质心触地位置 和 偏航角
         Pcomtouch[i] = KF::pcom + KF::B2W * KeyboardIns::dVb * ((1 - tsw[i]) * swperiod);
         FaiZtouch[i] = KF::Faiz + KeyboardIns::dWzb * ((1 - tsw[i]) * swperiod);
+        // 世界坐标系下的每个足的对称点坐标
+        /// @note  足底轨迹规划
+        // 落足点坐标 无论摆动还是支撑腿 都应该一直预测  。 摆动时 要预防突发情况，及时改变落足点
+        Psymtouch[i] = Pcomtouch[i] + TF_Z(FaiZtouch[i]) * SymPb[i];
+        P1[i] = (KeyboardIns::dVO * stperiod) / 2;
+        P2[i] = TF_Z(FaiZtouch[i]) * ((TF_Z(KeyboardIns::dWzO * stperiod / 2) * SymPb[i]) - SymPb[i]);
+        P3[i] = kp * (KF::vcom - KeyboardIns::dVO);
+        P4[i] = (KF::pcom[2] / 9.81) * (KF::vcom.cross(KF::B2W * KF::Wb));
+        // 最终的落足点坐标
+        Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
+        Pswend[i][2] = KeyboardIns::A[0] + KeyboardIns::A[1] * (Pswend[i][0]) + KeyboardIns::A[2] * (Pswend[i][1]);
 
-        if (sFai[i] == 1) // 支撑腿一直更新目标落足点 直到支撑的最后一刻落足点确定，不再更新
+        // 摆动腿 根据 终点和起点进行轨迹规划
+        if (sFai[i] == 0)
         {
-
-          // 世界坐标系下的每个足的对称点坐标
-          /// @note  足底轨迹规划
-          Psymtouch[i] = Pcomtouch[i] + TF_Z(FaiZtouch[i]) * SymPb[i];
-          P1[i] = (KeyboardIns::dVO * stperiod) / 2;
-          P2[i] = TF_Z(FaiZtouch[i]) * ((TF_Z(KeyboardIns::dWzO * stperiod / 2) * SymPb[i]) - SymPb[i]);
-          P3[i] = kp * (KF::vcom - KeyboardIns::dVO);
-          P4[i] = (KF::pcom[2] / 9.81) * (KF::vcom.cross(KF::B2W * KF::Wb));
-          // 最终的落足点坐标
-          Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
-          Pswend[i][2] = KeyboardIns::A[0] + KeyboardIns::A[1] * (Pswend[i][0]) + KeyboardIns::A[2] * (Pswend[i][1]);
-        }
-        else // 摆动腿 根据 终点和起点进行轨迹规划
-        {
+          // 在这里进行 摆动腿规划
         }
       }
     }
@@ -494,7 +493,7 @@ namespace Quad
     VectorXf Z(4), A(3), _A(3), N(3), N_(3);
     Vector3f Tao, dFai;
     vector<VectorXf> desirex;
-    MatrixXf D(13*h,1);
+    MatrixXf D(13 * h, 1);
     void Update_ins(mujoco::Simulate *sim)
     {
       static auto KeyPressedTime = std::chrono::steady_clock::now();
@@ -607,12 +606,12 @@ namespace Quad
           N << -A[1], -A[2], 1;
           // 归一化的法向量
           N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
-          dPO = KF::X.block(0, 0, 3, 1);
+          dPO = KF::pcom;
           Tao = TFZ.inverse() * N_;
           dFaix = asin(Tao[1]);
           dFaiy = atan(Tao[0] / Tao[2]);
           dFai << dFaix, dFaiy, dFaiz;
-          desirex[i] << dFai, dPO, dWO, dVO, -9.81; // 此为当前状态
+          desirex[i] << dFai, dPO, KF::B2W * KF::Wb, KF::vcom, -9.81; // 此为当前状态
         }
         dFaiz = dFaiz + dWzO * MPCtime;
         // Z轴旋转矩阵
@@ -632,9 +631,9 @@ namespace Quad
         // 更新期望状态向量
         desirex[i + 1] << dFai, dPO, dWO, dVO, -9.81;
       }
-      for(int i=0;i<h;i++)
+      for (int i = 0; i < h; i++)
       {
-        D.block(13*h,1,13,1) = desirex[i+1];
+        D.block(13 * h, 1, 13, 1) = desirex[i + 1];
       }
     }
   };
@@ -646,15 +645,18 @@ namespace Quad
     Matrix3f BInertia, PInertia;
     float MPC_T = 0.01;
     // float h; // mpc预测步长
-    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13), 
-    Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h),g(12*h,1),
-    lb(12*h,1),ub(12*h,1);
+    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13),
+        Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h), g(12 * h, 1),
+        lb(12 * h, 1), ub(12 * h, 1), lba(20 * h, 1), uba(20 * h, 1), Ampc(20 * h, 12 * h);
     VectorXf vec(13);
     MatrixXf temp(13, 13);
+    MatrixXf Umpc(12, 1);
     int nv = 12 * h;
     int nc = 20 * h;
     int nWSR = 100; // 最大工作集切换次数（Working Set Recalculations）
+    float Fmax = 30;
     qpOASES::QProblem solver(nv, nc);
+    float fri; // 摩擦系数
     Matrix3f QUa2Mat(float w, float x, float y, float z)
     {
       Matrix3f tran;
@@ -702,9 +704,32 @@ namespace Quad
       option.setToMPC();
       option.printLevel = qpOASES::PL_NONE;
       solver.setOptions(option);
-      
-      lb.setZero();
 
+      lb.setZero();
+      lba.setZero();
+      uba.setZero();
+      VectorXf vub;
+      vub << 1e10, 1e10, 1e10, 1e10, Fmax;
+      for (int i = 0; i < h; i++)
+      {
+        for (int j = 0; j < 4; j++)
+        {
+          uba.block(20 * i + j * 5, 1, 5, 1) = vub;
+        }
+      }
+      MatrixXf t(5, 3);
+      t << -1, 0, fri,
+          0, -1, fri,
+          1, 0, fri,
+          0, 1, fri,
+          0, 0, 1;
+      for (int i = 0; i < h; ++i)
+      {
+        for (int j = 0; j < 4; ++j)
+        {
+          Ampc.block(20 * h + 5 * j, 12 * h + 3 * j, 5, 3) = t;
+        }
+      }
     }
 
     Matrix3f getRotationMatrix(double psi, double theta, double phi)
@@ -753,47 +778,47 @@ namespace Quad
       }
 
       for (int i = 0; i < h; i++) // B0 - B9
-      {  Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
-          PInertia = Ro * BInertia * (Ro.transpose());
+      {
+        Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
+        PInertia = Ro * BInertia * (Ro.transpose());
 
-          if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
-          {
-            B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
-          }
-          else // 支撑腿   用 支撑足  - 质心
-          {
-            B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
-          }
+        if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
+        {
+          B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
+        }
+        else // 支撑腿   用 支撑足  - 质心
+        {
+          B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
+        }
 
-          if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
-          {
-            B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
-          }
-          else // 支撑腿   用 支撑足  - 质心
-          {
-            B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
-          }
+        if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
+        {
+          B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
+        }
+        else // 支撑腿   用 支撑足  - 质心
+        {
+          B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
+        }
 
-          if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
-          {
-            B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
-          }
-          else // 支撑腿   用 支撑足  - 质心
-          {
-            B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
-          }
+        if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
+        {
+          B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
+        }
+        else // 支撑腿   用 支撑足  - 质心
+        {
+          B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
+        }
 
-          if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
-          {
-            B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
-          }
-          else // 支撑腿   用 支撑足  - 质心
-          {
-            B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
-          }
+        if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
+        {
+          B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
+        }
+        else // 支撑腿   用 支撑足  - 质心
+        {
+          B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
+        }
         for (int j = i + 1; j < h + 1; j++)
         {
-        
 
           if (j == i + 1)
           {
@@ -804,9 +829,126 @@ namespace Quad
           Temp_A = A * Temp_A;
         }
       }
+      ub.setConstant(30);
+      for (int i = 0; i < 4; i++)
+      {
+        if (Gait::sFai[i] == 0) // 摆动腿
+        {
+          for (int j = 0; j < h; j++)
+          {
+            ub.block(12 * j + 3 * i, 1, 3, 1) = Vector3f::Zero();
+          }
+        }
+      }
       H = 2 * (Bqp.transpose() * Q * Bqp + R);
       g = 2 * Bqp.transpose() * Q * (Aqp * KeyboardIns::desirex[0] - D);
-      qpOASES::returnValue status = solver.init(H, g, A, lb, ub, lbA, ubA, nWSR);
+
+      Matrix<double, Dynamic, Dynamic, RowMajor> H_qp = H.cast<double>();
+      VectorXd g_qp = g.cast<double>();
+      Matrix<double, Dynamic, Dynamic, RowMajor> A_qp = Ampc.cast<double>();
+      VectorXd lb_qp = lb.cast<double>();
+      VectorXd ub_qp = ub.cast<double>();
+      VectorXd lba_qp = lba.cast<double>();
+      VectorXd uba_qp = uba.cast<double>();
+
+      // 2. 调用 qpOASES
+      //     qpOASES 接受的参数是 real_t *(通常是 double *)
+      //         使用.data() 获取 Eigen 矩阵内部的原始指针 int nWSR_actual = nWSR;
+      qpOASES::returnValue status = solver.init(
+          H_qp.data(),
+          g_qp.data(),
+          A_qp.data(),
+          lb_qp.data(),
+          ub_qp.data(),
+          lba_qp.data(),
+          uba_qp.data(),
+          nWSR);
+
+      if (status == qpOASES::SUCCESSFUL_RETURN)
+      {
+        // 获取解
+        double xOpt[12 * h];
+        solver.getPrimalSolution(xOpt);
+        Umpc << xOpt[0], xOpt[1], xOpt[2], xOpt[3], xOpt[4], xOpt[5], xOpt[6], xOpt[7], xOpt[8], xOpt[9], xOpt[10], xOpt[11];
+        // 将 xOpt 传给下游控制器
+      }
+      else
+      {
+        std::cout << "MPC SOlve  Failed--------" << std::endl;
+      }
     }
   };
+
+  namespace WBC
+  {
+    // 用零空间求解多任务带优先级的位置 速度 加速度
+    // 按任务优先级
+    //  广义qdot qddot
+    MatrixXf qdot(18, 1), qddot(18, 1), qcmd(18, 1), qdotcmd(18, 1),
+        qddotcmd(18, 1), detqcmd(18, 1), q(18, 1), qdotcmde(18, 1), qddotcmde(18, 1);
+    // 4个任务雅可比矩阵
+    MatrixXf J1, J2, J3, J4, J1q, J2q, J3q, J4q, e, x, JA, NA;
+    Matrix3f tran2; // 任务2 用的
+    float kp, kd;
+    MatrixXf WideInverse(MatrixXf mat)
+    {
+      return mat.transpose() * ((mat * mat.transpose()).inverse());
+    }
+    void WBC_Update()
+    {
+      // 第一个任务 支撑腿跟随
+      detqcmd.setZero();
+      qdotcmde.setZero();
+      qddotcmde = WideInverse(J1) * (-J1q);
+      for (int i = 0; i < 3; ++i)
+      {
+        switch (i)
+        {
+        case 0: // 第二个 机身转动
+          tran2 << cos(KeyboardIns::desirex[0][1]) * cos(KeyboardIns::desirex[0][2]), -sin(KeyboardIns::desirex[0][2]), 0,
+              cos(KeyboardIns::desirex[0][1]) * sin(KeyboardIns::desirex[0][2]), cos(KeyboardIns::desirex[0][2]), 0,
+              -sin(KeyboardIns::desirex[0][1]), 0, 1;
+          Vector3f dfai = {KeyboardIns::desirex[1][0], KeyboardIns::desirex[1][1], KeyboardIns::desirex[1][2]};
+          Vector3f fai = {KeyboardIns::desirex[0][0], KeyboardIns::desirex[0][1], KeyboardIns::desirex[0][2]};
+          Vector3f dwO = {KeyboardIns::desirex[1][6], KeyboardIns::desirex[1][7], KeyboardIns::desirex[1][8]};
+
+          e = tran2 * (dfai - fai);
+          x = kd * (dwO - KF::B2W * KF::Wb) + kp * (e);
+          JA.add(J1);
+          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
+          detqcmd = detqcmd + WideInverse(J2 * NA) * (e - J2 * detqcmd);
+          qdotcmde = qdotcmde + WideInverse(J2 * NA) * (dwO - J2 * qdotcmde);
+          qddotcmde = qddotcmde + WideInverse(J2 * NA) * (x - J2q - J2 * qddotcmde);
+          break;
+        case 1: // 机身平动
+
+          Vector3f dPo = {KeyboardIns::desirex[1][3], KeyboardIns::desirex[1][4], KeyboardIns::desirex[1][5]};
+          Vector3f dVO = {KeyboardIns::desirex[1][9], KeyboardIns::desirex[1][10], KeyboardIns::desirex[1][11]};
+
+          e = dPo - KF::pcom;
+          x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
+          JA.add(J2);
+          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
+          detqcmd = detqcmd + WideInverse(J3 * NA) * (e - J3 * detqcmd);
+          qdotcmde = qdotcmde + WideInverse(J3 * NA) * (dVO - J3 * qdotcmde);
+          qddotcmde = qddotcmde + WideInverse(J3 * NA) * (x - J3q - J3 * qddotcmde);
+          break;
+
+        case 2: // 摆动腿
+
+          e = dPo - KF::pcom;
+          x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
+          JA.add(J3);
+          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
+          detqcmd = detqcmd + WideInverse(J4 * NA) * (e - J4 * detqcmd);
+          qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVO - J4 * qdotcmde);
+          qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
+          break;
+        }
+      }
+      qcmd = q + detqcmd;
+    }
+
+  };
+
 };

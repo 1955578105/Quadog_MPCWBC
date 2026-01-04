@@ -56,13 +56,9 @@ void threadMpc(mujoco::Simulate *sim)
   {
 
     auto enterTime = std::chrono::steady_clock::now();
-    //  std::cout << "This is my thread function running." << std::endl;
-    // Quad::ConvexMPC::UpdateState();
 
-    // std::cout << Quad::ConvexMPC::Continue_A << std::endl;
-    // 检测按键状态
-
-    enterTime += std::chrono::milliseconds(10); // 1khz
+    
+    enterTime += std::chrono::milliseconds(1000); // 1khz
 
     std::this_thread::sleep_until(enterTime);
   }
