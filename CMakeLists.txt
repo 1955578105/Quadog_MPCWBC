@@ -16,20 +16,26 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/simulate)
 #release版本
 set(MUJOCO_PATH "/home/mujoco/mujoco-3.3.0-linux-x86_64/mujoco-3.3.0")
 set(qpOASES_PATH "/home/qpOASES/qpOASES")
+set(QuadProg_PATH "/home/QuadProgpp")
+
 include_directories(${qpOASES_PATH}/include)
+include_directories(${QuadProg_PATH}/src)
+
 include_directories(${MUJOCO_PATH}/include)
 include_directories(${MUJOCO_PATH}/simulate)
 include_directories(/home/eigen/eigen3/Eigen)
 include_directories(../)
 link_directories(${MUJOCO_PATH}/bin)
 link_directories(${qpOASES_PATH}/build/libs)
+link_directories(${QuadProg_PATH}/build/src)
+
 set(MUJOCO_LIB ${MUJOCO_PATH}/lib/libmujoco.so)
 
 
 add_executable(basic main.cc simulate.cc glfw_adapter.cc glfw_dispatch.cc platform_ui_adapter.cc Quad.cpp Self_mujoco_lib.cpp)
 
 #后两个使用
-target_link_libraries(basic ${MUJOCO_LIB} glut GL GLU glfw lodepng libqpOASES.a)
+target_link_libraries(basic ${MUJOCO_LIB} glut GL GLU glfw lodepng libqpOASES.a libquadprog.a)
 
 
 #simulate编译

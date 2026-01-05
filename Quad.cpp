@@ -25,7 +25,7 @@ namespace Quad
   //   4. 忙碌状态判断  ： 下蹲 和站立可以用角度判断  行走要等脚都触碰地
   namespace FSM
   {
-    Matrix3i StateTransformMatrix;
+    Eigen::Matrix3i StateTransformMatrix;
     FSMstate currentState;
     Busystate busystate;
     void Init_FSM()
@@ -80,13 +80,16 @@ namespace Quad
 
   namespace Gait
   {
-    Matrix<float, 2, 4> Gd;
-    Matrix<float, 2, 4> Go;
-    Vector4f tFai, sFai;
-    Vector4f tst, tsw;
-    Vector3f FrPstend, FlPstend, RrPstend, RlPstend;
+    Eigen::Matrix<float, 2, 4> Gd;
+    Eigen::Matrix<float, 2, 4> Go;
+    Eigen::Vector4f tFai, sFai;
+    Eigen::Vector4f tst, tsw;
+    Eigen::Vector3f FrPstend, FlPstend, RrPstend, RlPstend;
     float stperiod, swperiod; // 支撑和摆动周期  不同的步态不同
-    void Gait_Init()
+    vector<Eigen::Vector3f> FootdesirePos, FootdesireVelocity, Pstend, Pstsw;
+    float dfooth = 0.06; // 期望抬腿高度
+    void
+    Gait_Init()
     {
       Gd << 0.5, 0.5, 0.5, 0.5,
           0.75, 0.75, 0.75, 0.75;
@@ -171,34 +174,38 @@ namespace Quad
       if (sFai[0] == 1)
       {
         FrPstend = KF::X.block(6, 0, 3, 1);
+        Pstend[0] = FrPstend;
       }
       if (sFai[1] == 1)
       {
         FlPstend = KF::X.block(9, 0, 3, 1);
+        Pstend[1] = FlPstend;
       }
       if (sFai[2] == 1)
       {
         RrPstend = KF::X.block(12, 0, 3, 1);
+        Pstend[2] = RrPstend;
       }
       if (sFai[3] == 1)
       {
         RlPstend = KF::X.block(15, 0, 3, 1);
+        Pstend[3] = RlPstend;
       }
     }
 
-    Matrix3f TF_Z(float dFaiz)
+    Eigen::Matrix3f TF_Z(float dFaiz)
     {
-      Matrix3f TFZ;
+      Eigen::Matrix3f TFZ;
       TFZ << cos(dFaiz), -sin(dFaiz), 0,
           sin(dFaiz), cos(dFaiz), 0,
           0, 0, 1;
       return TFZ;
     }
 
-    Vector3f SymPb1, SymPb2, SymPb3, SymPb4;
-    vector<Vector3f> SymPb;
-    Vector4f FaiZtouch;
-    vector<Vector3f> Pcomtouch, Psymtouch, Pswend, P1, P2, P3, P4;
+    Eigen::Vector3f SymPb1, SymPb2, SymPb3, SymPb4;
+    vector<Eigen::Vector3f> SymPb;
+    Eigen::Vector4f FaiZtouch;
+    vector<Eigen::Vector3f> Pcomtouch, Psymtouch, Pswend, P1, P2, P3, P4;
     float kp = 0.15;
     ; // 对称足底位置的XY坐标向量
     /// @brief 落足点规划 和 足底轨迹规划
@@ -231,9 +238,27 @@ namespace Quad
         Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
         Pswend[i][2] = KeyboardIns::A[0] + KeyboardIns::A[1] * (Pswend[i][0]) + KeyboardIns::A[2] * (Pswend[i][1]);
 
+        Pstsw[i] = Pswend[i] - Pstend[i];
         // 摆动腿 根据 终点和起点进行轨迹规划
+        static float lastfoot = 0;
         if (sFai[i] == 0)
         {
+          FootdesirePos[i][0] = Pstend[i][0] + Pstsw[i][0] * (3 * pow(tsw[i], 2) - 2 * pow(tsw[i], 3));
+          FootdesirePos[i][1] = Pstend[i][1] + Pstsw[i][1] * (3 * pow(tsw[i], 2) - 2 * pow(tsw[i], 3));
+          FootdesireVelocity[i][0] = Pstsw[i][0] * (6 * tsw[i] - 6 * pow(tsw[i], 2));
+          FootdesireVelocity[i][1] = Pstsw[i][1] * (6 * tsw[i] - 6 * pow(tsw[i], 2));
+          if (tsw[i] <= 0.5)
+          {
+            FootdesirePos[i][2] = Pstend[i][2] + dfooth * (12 * pow(tsw[i], 2) - 16 * pow(tsw[i], 3));
+            lastfoot = FootdesirePos[i][2];
+            FootdesireVelocity[i][2] = dfooth * (12 * tsw[i] - 24 * pow(tsw[i], 2));
+          }
+          else
+          {
+            FootdesirePos[i][2] = lastfoot + (Pswend[i][2] - lastfoot) * (12 * pow(tsw[i], 2) - 16 * pow(tsw[i], 3));
+            FootdesireVelocity[i][2] = (Pswend[i][2] - dfooth) * (12 * tsw[i] - 24 * pow(tsw[i], 2));
+          }
+
           // 在这里进行 摆动腿规划
         }
       }
@@ -250,18 +275,18 @@ namespace Quad
   namespace KF
   {
     RMT B2I, I2I0, I02W, B2W;
-    VectorXf jointpos(12), jointvel(12), jointForce(12);
-    Vector3f Flipb, Fripb, Rlipb, Rripb;
-    Vector3f FliPbv, FriPbv, RliPbv, RriPbv;
-    Vector3f qvfr, qvfl, qvrr, qvrl;
-    Matrix3f jocofr, jocofl, jocorl, jocorr;
+    Eigen::VectorXf jointpos(12), jointvel(12), jointForce(12);
+    Eigen::Vector3f Flipb, Fripb, Rlipb, Rripb;
+    Eigen::Vector3f FliPbv, FriPbv, RliPbv, RriPbv;
+    Eigen::Vector3f qvfr, qvfl, qvrr, qvrl;
+    Eigen::Matrix3f jocofr, jocofl, jocorl, jocorr;
     vector<float> Quat;
     float Faiz, Faix, Faiy;
-    Vector3f Wb;  // 角速度在本体系中的表示
-    Matrix3f WbS; // 反对称矩阵
-    Matrix3f skewSymmetric(const Vector3f &v)
+    Eigen::Vector3f Wb;  // 角速度在本体系中的表示
+    Eigen::Matrix3f WbS; // 反对称矩阵
+    Eigen::Matrix3f skewSymmetric(const Eigen::Vector3f &v)
     {
-      Matrix3f m;
+      Eigen::Matrix3f m;
       m << 0, -v.z(), v.y(),
           v.z(), 0, -v.x(),
           -v.y(), v.x(), 0;
@@ -271,7 +296,7 @@ namespace Quad
     void B2WUpdate(const mjModel *model, const mjData *data, const std::string &sensor_name)
     {
       Quat = mujo::get_sensor_data(model, data, sensor_name); // 获得角度
-      Quaternionf q(Quat[0], Quat[1], Quat[2], Quat[3]);
+      Eigen::Quaternionf q(Quat[0], Quat[1], Quat[2], Quat[3]);
       Faiz = q.toRotationMatrix().eulerAngles(2, 1, 0)[0]; // 获得当前偏航角
       vector<float> temp = mujo::get_sensor_data(model, data, "imu_gyro");
       Wb << temp[0], temp[1], temp[2]; // 获得角速度数据 由于Imu坐标系和本体系方向相同  所以不用变换
@@ -370,33 +395,33 @@ namespace Quad
       RliPbv = jocorl * qvrl;
       RriPbv = jocorr * qvrr;
     }
-    MatrixXf A(18, 18);
-    MatrixXf B(18, 3);
-    MatrixXf U(3, 1);
-    MatrixXf H(28, 18); // 把状态向量  映射到 观测向量
-    MatrixXf Q(18, 18);
-    MatrixXf R(28, 28);
-    MatrixXf _X(18, 1);
-    MatrixXf X(18, 1);
-    MatrixXf _P(18, 18);
-    MatrixXf P(18, 18);
-    MatrixXf Z(28, 1);
-    MatrixXf K(18, 28);
+    Eigen::MatrixXf A(18, 18);
+    Eigen::MatrixXf B(18, 3);
+    Eigen::MatrixXf U(3, 1);
+    Eigen::MatrixXf H(28, 18); // 把状态向量  映射到 观测向量
+    Eigen::MatrixXf Q(18, 18);
+    Eigen::MatrixXf R(28, 28);
+    Eigen::MatrixXf _X(18, 1);
+    Eigen::MatrixXf X(18, 1);
+    Eigen::MatrixXf _P(18, 18);
+    Eigen::MatrixXf P(18, 18);
+    Eigen::MatrixXf Z(28, 1);
+    Eigen::MatrixXf K(18, 28);
 
-    Matrix3f iden3 = Matrix3f::Identity();
-    Matrix3f _3x3 = Matrix3f::Zero();
-    MatrixXf _3x12(3, 12);
-    MatrixXf _12x3(12, 3);
+    Eigen::Matrix3f iden3 = Eigen::Matrix3f::Identity();
+    Eigen::Matrix3f _3x3 = Eigen::Matrix3f::Zero();
+    Eigen::MatrixXf _3x12(3, 12);
+    Eigen::MatrixXf _12x3(12, 3);
 
-    MatrixXf iden12(12, 12);
-    MatrixXf iden18(18, 18);
-    MatrixXf _12x12(12, 12);
-    Matrix<float, 1, 1> Onemat;
-    Vector3f pcom, vcom;
+    Eigen::MatrixXf iden12(12, 12);
+    Eigen::MatrixXf iden18(18, 18);
+    Eigen::MatrixXf _12x12(12, 12);
+    Eigen::Matrix<float, 1, 1> Onemat;
+    Eigen::Vector3f pcom, vcom;
     void kf_Init(float t) // t 是控制步长
     {
 
-      iden12 = MatrixXf ::Identity(12, 12);
+      iden12 = Eigen::MatrixXf ::Identity(12, 12);
       // 初始化常量
       A << iden3, t * iden3, _3x12,
           _3x3, iden3, _3x12,
@@ -434,10 +459,10 @@ namespace Quad
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1;
       X << 0, 0, 0.44, 0, 0, 0, 0.1934, -0.142, 0, 0.1934, 0.142, 0, -0.1934, -0.142, 0, -0.1934, 0.142, 0; // 初始状态 应接近 真实状态
-      P = MatrixXf::Ones(18, 18);
-      iden18 = MatrixXf ::Identity(18, 18);
+      P = Eigen::MatrixXf::Ones(18, 18);
+      iden18 = Eigen::MatrixXf ::Identity(18, 18);
       Onemat << 1;
-      Q.block(0, 0, 6, 6) = MatrixXf::Identity(6, 6);
+      Q.block(0, 0, 6, 6) = Eigen::MatrixXf::Identity(6, 6);
     }
     // 求解 卡尔曼
     void Kfsolver()
@@ -483,17 +508,17 @@ namespace Quad
     /// @brief 期望速度和角速度
     float dVxb, dVyb, dWzb, dWzO;
     float dFaiz, dHb, dFaix, dFaiy;
-    MatrixXf dVb(3, 1);
-    MatrixXf dVO(3, 1);
-    MatrixXf dWb(3, 1);
-    MatrixXf dWO(3, 1);
-    Matrix3f TFZ;
-    Vector3f dPO;
-    MatrixXf W(4, 3);
-    VectorXf Z(4), A(3), _A(3), N(3), N_(3);
-    Vector3f Tao, dFai;
-    vector<VectorXf> desirex;
-    MatrixXf D(13 * h, 1);
+    Eigen::MatrixXf dVb(3, 1);
+    Eigen::MatrixXf dVO(3, 1);
+    Eigen::MatrixXf dWb(3, 1);
+    Eigen::MatrixXf dWO(3, 1);
+    Eigen::Matrix3f TFZ;
+    Eigen::Vector3f dPO;
+    Eigen::MatrixXf W(4, 3);
+    Eigen::VectorXf Z(4), A(3), _A(3), N(3), N_(3);
+    Eigen::Vector3f Tao, dFai;
+    vector<Eigen::VectorXf> desirex;
+    Eigen::MatrixXf D(13 * h, 1);
     void Update_ins(mujoco::Simulate *sim)
     {
       static auto KeyPressedTime = std::chrono::steady_clock::now();
@@ -562,7 +587,7 @@ namespace Quad
             KeyPressedTime = std::chrono::steady_clock::now();
           }
         }
-        enterTime += std::chrono::milliseconds(2); // 1khz
+        enterTime += std::chrono::milliseconds(2); // 500hz
 
         std::this_thread::sleep_until(enterTime);
       }
@@ -641,25 +666,25 @@ namespace Quad
   namespace ConvexMPC
   {
 
-    MatrixXf Temp_A(13, 13), A(13, 13), Continue_B(13, 13), B(13, 13);
-    Matrix3f BInertia, PInertia;
+    Eigen::MatrixXf Temp_A(13, 13), A(13, 13), Continue_B(13, 13), B(13, 13);
+    Eigen::Matrix3f BInertia, PInertia;
     float MPC_T = 0.01;
     // float h; // mpc预测步长
-    MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13),
+    Eigen::MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13),
         Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h), g(12 * h, 1),
         lb(12 * h, 1), ub(12 * h, 1), lba(20 * h, 1), uba(20 * h, 1), Ampc(20 * h, 12 * h);
-    VectorXf vec(13);
-    MatrixXf temp(13, 13);
-    MatrixXf Umpc(12, 1);
+    Eigen::VectorXf vec(13);
+    Eigen::MatrixXf temp(13, 13);
+    Eigen::MatrixXf Umpc(12, 1);
     int nv = 12 * h;
     int nc = 20 * h;
     int nWSR = 100; // 最大工作集切换次数（Working Set Recalculations）
     float Fmax = 30;
     qpOASES::QProblem solver(nv, nc);
     float fri; // 摩擦系数
-    Matrix3f QUa2Mat(float w, float x, float y, float z)
+    Eigen::Matrix3f QUa2Mat(float w, float x, float y, float z)
     {
-      Matrix3f tran;
+      Eigen::Matrix3f tran;
       tran << 1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
           2 * x * y + 2 * w * z, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * w * x,
           2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
@@ -670,21 +695,21 @@ namespace Quad
       // 初始化 A的固定值
       A.setZero();
       A.setIdentity(13, 13);
-      A.block(3, 9, 3, 3) = Matrix3f::Identity() * MPC_T;
+      A.block(3, 9, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T;
       A(11, 12) = 1 * MPC_T;
 
       // 初始化  本体系的惯性矩阵
-      Matrix3f R = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
+      Eigen::Matrix3f R = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
       Eigen::Vector3f diaginertia(0.107027, 0.0980771, 0.0244531);
       Eigen::Matrix3f I_principal = diaginertia.asDiagonal();
       BInertia = R * I_principal * (R.transpose());
 
       // 初始化 B 的固定值
       B.setZero();
-      B.block(9, 0, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 3, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 6, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 9, 3, 3) = Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 0, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 3, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 6, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
+      B.block(9, 9, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
       // for(int i=0;i<h;i++)
       vec << 25, 25, 10, 1, 1, 100, 0, 0, 0.3, 0.2, 0.2, 20, 0;
       temp = vec.asDiagonal();
@@ -694,7 +719,7 @@ namespace Quad
         Q.block(i * 13, i * 13, 13, 13) = Q;
       }
       R.setZero();
-      R = MatrixXf::Identity(12 * h, 12 * h) * 0.00005;
+      R = Eigen::MatrixXf::Identity(12 * h, 12 * h) * 0.00005;
       Aqp.setZero();
       Bqp.setZero();
       //   h = 50; // 预测步长    预测时域不能超过半个步态周期
@@ -708,7 +733,7 @@ namespace Quad
       lb.setZero();
       lba.setZero();
       uba.setZero();
-      VectorXf vub;
+      Eigen::VectorXf vub;
       vub << 1e10, 1e10, 1e10, 1e10, Fmax;
       for (int i = 0; i < h; i++)
       {
@@ -717,7 +742,7 @@ namespace Quad
           uba.block(20 * i + j * 5, 1, 5, 1) = vub;
         }
       }
-      MatrixXf t(5, 3);
+      Eigen::MatrixXf t(5, 3);
       t << -1, 0, fri,
           0, -1, fri,
           1, 0, fri,
@@ -732,7 +757,7 @@ namespace Quad
       }
     }
 
-    Matrix3f getRotationMatrix(double psi, double theta, double phi)
+    Eigen::Matrix3f getRotationMatrix(double psi, double theta, double phi)
     {
       // 预先计算三角函数值
       double c_psi = std::cos(psi);
@@ -743,7 +768,7 @@ namespace Quad
       double s_phi = std::sin(phi);
 
       // 初始化 3x3 矩阵
-      Matrix3f R;
+      Eigen::Matrix3f R;
 
       // 第一行
       R(0, 0) = c_theta * c_psi;
@@ -779,7 +804,7 @@ namespace Quad
 
       for (int i = 0; i < h; i++) // B0 - B9
       {
-        Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
+        Eigen::Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
         PInertia = Ro * BInertia * (Ro.transpose());
 
         if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
@@ -836,20 +861,20 @@ namespace Quad
         {
           for (int j = 0; j < h; j++)
           {
-            ub.block(12 * j + 3 * i, 1, 3, 1) = Vector3f::Zero();
+            ub.block(12 * j + 3 * i, 1, 3, 1) = Eigen::Vector3f::Zero();
           }
         }
       }
       H = 2 * (Bqp.transpose() * Q * Bqp + R);
       g = 2 * Bqp.transpose() * Q * (Aqp * KeyboardIns::desirex[0] - D);
 
-      Matrix<double, Dynamic, Dynamic, RowMajor> H_qp = H.cast<double>();
-      VectorXd g_qp = g.cast<double>();
-      Matrix<double, Dynamic, Dynamic, RowMajor> A_qp = Ampc.cast<double>();
-      VectorXd lb_qp = lb.cast<double>();
-      VectorXd ub_qp = ub.cast<double>();
-      VectorXd lba_qp = lba.cast<double>();
-      VectorXd uba_qp = uba.cast<double>();
+      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> H_qp = H.cast<double>();
+      Eigen::VectorXd g_qp = g.cast<double>();
+      Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor> A_qp = Ampc.cast<double>();
+      Eigen::VectorXd lb_qp = lb.cast<double>();
+      Eigen::VectorXd ub_qp = ub.cast<double>();
+      Eigen::VectorXd lba_qp = lba.cast<double>();
+      Eigen::VectorXd uba_qp = uba.cast<double>();
 
       // 2. 调用 qpOASES
       //     qpOASES 接受的参数是 real_t *(通常是 double *)
@@ -884,13 +909,17 @@ namespace Quad
     // 用零空间求解多任务带优先级的位置 速度 加速度
     // 按任务优先级
     //  广义qdot qddot
-    MatrixXf qdot(18, 1), qddot(18, 1), qcmd(18, 1), qdotcmd(18, 1),
+    Eigen::MatrixXf qdot(18, 1), qddot(18, 1), qcmd(18, 1), qdotcmd(18, 1),
         qddotcmd(18, 1), detqcmd(18, 1), q(18, 1), qdotcmde(18, 1), qddotcmde(18, 1);
     // 4个任务雅可比矩阵
-    MatrixXf J1, J2, J3, J4, J1q, J2q, J3q, J4q, e, x, JA, NA;
-    Matrix3f tran2; // 任务2 用的
+    Eigen::MatrixXf J1, J2(3, 18), J3(3, 18), J4, J1q, J2q, J3q, J4q, e(3, 1), x(3, 1), JA, NA;
+    Eigen::Matrix3f tran2; // 任务2 用的
+    Eigen::MatrixXf Q1(6, 6), Q2(12, 12), G(18, 18), CE, Ce, CI, Ci, Mf, Jcf, Cf, CA, _CA, CA_;
     float kp, kd;
-    MatrixXf WideInverse(MatrixXf mat)
+
+    // multi-Rigid-Body dynamics algorithm
+
+    Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
       return mat.transpose() * ((mat * mat.transpose()).inverse());
     }
@@ -904,49 +933,63 @@ namespace Quad
       {
         switch (i)
         {
-        case 0: // 第二个 机身转动
+        case 0:
+        { // 第二个 机身转动
           tran2 << cos(KeyboardIns::desirex[0][1]) * cos(KeyboardIns::desirex[0][2]), -sin(KeyboardIns::desirex[0][2]), 0,
               cos(KeyboardIns::desirex[0][1]) * sin(KeyboardIns::desirex[0][2]), cos(KeyboardIns::desirex[0][2]), 0,
               -sin(KeyboardIns::desirex[0][1]), 0, 1;
-          Vector3f dfai = {KeyboardIns::desirex[1][0], KeyboardIns::desirex[1][1], KeyboardIns::desirex[1][2]};
-          Vector3f fai = {KeyboardIns::desirex[0][0], KeyboardIns::desirex[0][1], KeyboardIns::desirex[0][2]};
-          Vector3f dwO = {KeyboardIns::desirex[1][6], KeyboardIns::desirex[1][7], KeyboardIns::desirex[1][8]};
+          Eigen::Vector3f dfai = {KeyboardIns::desirex[1][0], KeyboardIns::desirex[1][1], KeyboardIns::desirex[1][2]};
+          Eigen::Vector3f fai = {KeyboardIns::desirex[0][0], KeyboardIns::desirex[0][1], KeyboardIns::desirex[0][2]};
+          Eigen::Vector3f dwO = {KeyboardIns::desirex[1][6], KeyboardIns::desirex[1][7], KeyboardIns::desirex[1][8]};
 
           e = tran2 * (dfai - fai);
           x = kd * (dwO - KF::B2W * KF::Wb) + kp * (e);
-          JA.add(J1);
-          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
+          JA.block(0, 0, J1.rows(), 18) = J1;
+          NA = Eigen::MatrixXf::Identity(JA.cols(), JA.cols()) - WideInverse(JA) * JA;
           detqcmd = detqcmd + WideInverse(J2 * NA) * (e - J2 * detqcmd);
           qdotcmde = qdotcmde + WideInverse(J2 * NA) * (dwO - J2 * qdotcmde);
           qddotcmde = qddotcmde + WideInverse(J2 * NA) * (x - J2q - J2 * qddotcmde);
           break;
+        }
         case 1: // 机身平动
-
-          Vector3f dPo = {KeyboardIns::desirex[1][3], KeyboardIns::desirex[1][4], KeyboardIns::desirex[1][5]};
-          Vector3f dVO = {KeyboardIns::desirex[1][9], KeyboardIns::desirex[1][10], KeyboardIns::desirex[1][11]};
+        {
+          Eigen::Vector3f dPo = {KeyboardIns::desirex[1][3], KeyboardIns::desirex[1][4], KeyboardIns::desirex[1][5]};
+          Eigen::Vector3f dVO = {KeyboardIns::desirex[1][9], KeyboardIns::desirex[1][10], KeyboardIns::desirex[1][11]};
 
           e = dPo - KF::pcom;
           x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
-          JA.add(J2);
-          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
+          JA.block(J1.rows(), 0, 3, 18) = J2;
+          NA = Eigen::MatrixXf::Identity(JA.cols(), JA.cols()) - WideInverse(JA) * JA;
           detqcmd = detqcmd + WideInverse(J3 * NA) * (e - J3 * detqcmd);
           qdotcmde = qdotcmde + WideInverse(J3 * NA) * (dVO - J3 * qdotcmde);
           qddotcmde = qddotcmde + WideInverse(J3 * NA) * (x - J3q - J3 * qddotcmde);
           break;
-
+        }
         case 2: // 摆动腿
-
-          e = dPo - KF::pcom;
-          x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
-          JA.add(J3);
-          NA = MatrixXf::Identity() - WideInverse(JA) * JA;
-          detqcmd = detqcmd + WideInverse(J4 * NA) * (e - J4 * detqcmd);
-          qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVO - J4 * qdotcmde);
-          qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
-          break;
+        {
+          // e = dPo - KF::pcom;
+          // x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
+          // JA.block(J1.rows() + 3, 0, 3, 18) = J3;
+          // NA = Eigen::MatrixXf::Identity() - WideInverse(JA) * JA;
+          // detqcmd = detqcmd + WideInverse(J4 * NA) * (e - J4 * detqcmd);
+          // qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVO - J4 * qdotcmde);
+          // qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
+          // break;
+        }
         }
       }
       qcmd = q + detqcmd;
+
+      // quadprog求解 松弛优化变量
+      Q1 = Eigen::MatrixXf::Identity(6, 6);
+      Q2 = Eigen::MatrixXf::Identity(12, 12) * 0.005;
+      G.setZero();
+      G.block(0, 0, 6, 6) = Q1;
+      G.block(6, 6, 12, 12) = Q2;
+      CE = Mf - Jcf.transpose();
+      Ce = -Jcf.transpose() * ConvexMPC::Umpc + Cf + Mf * qddotcmd;
+
+      double cost = quadprogpp::solve_quadprog(G_qp, g_qp, CE_qp, ce0_qp, CI_qp, ci0_qp, x_qp);
     }
 
   };
