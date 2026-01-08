@@ -11,7 +11,8 @@
 #include "QuadProg++.hh"
 #include "glfw_adapter.h"
 #include <thread>
-
+#include <memory>
+#include <list>
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Eigen::Matrix3f;

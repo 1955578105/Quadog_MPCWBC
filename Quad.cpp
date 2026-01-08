@@ -405,7 +405,7 @@ namespace Quad
     Eigen::MatrixXf X(18, 1);
     Eigen::MatrixXf _P(18, 18);
     Eigen::MatrixXf P(18, 18);
-    Eigen::MatrixXf Z(28, 1);
+    Eigen::MatrixXf0 Z(28, 1);
     Eigen::MatrixXf K(18, 28);
 
     Eigen::Matrix3f iden3 = Eigen::Matrix3f::Identity();
@@ -906,6 +906,141 @@ namespace Quad
 
   namespace WBC
   {
+    struct node
+    {
+      std::weak_ptr<node> parent;
+      std::vector<std::shared_ptr<node>> child;
+      int const num;
+      node(int const n) : num(n) {}
+      void add_child(const std::shared_ptr<node> &c)
+      {
+        child.push_back(c);
+      }
+    };
+
+    void bind(const std::shared_ptr<node> &parent, const std::shared_ptr<node> &child)
+    {
+
+      parent->add_child(child);
+      child->parent = parent;
+    }
+    std::shared_ptr<node> node0 = std::make_shared<node>(0);
+    std::shared_ptr<node> node1 = std::make_shared<node>(1);
+    std::shared_ptr<node> node2 = std::make_shared<node>(2);
+    std::shared_ptr<node> node3 = std::make_shared<node>(3);
+    std::shared_ptr<node> node4 = std::make_shared<node>(4);
+    std::shared_ptr<node> node5 = std::make_shared<node>(5);
+    std::shared_ptr<node> node6 = std::make_shared<node>(6);
+    std::shared_ptr<node> node7 = std::make_shared<node>(7);
+    std::shared_ptr<node> node8 = std::make_shared<node>(8);
+    std::shared_ptr<node> node9 = std::make_shared<node>(9);
+    std::shared_ptr<node> node10 = std::make_shared<node>(10);
+    std::shared_ptr<node> node11 = std::make_shared<node>(11);
+    std::shared_ptr<node> node12 = std::make_shared<node>(12);
+    std::shared_ptr<node> node13 = std::make_shared<node>(13);
+    vector<std::shared_ptr<node>> Vnode;
+    void CreatTree()
+    {
+      bind(node0, node1);
+      bind(node1, node2);
+      bind(node1, node5);
+      bind(node1, node8);
+      bind(node1, node11);
+      bind(node2, node3);
+      bind(node3, node4);
+      bind(node5, node6);
+      bind(node6, node7);
+      bind(node8, node9);
+      bind(node9, node10);
+      bind(node11, node12);
+      bind(node12, node13);
+      Vnode.push_back(node0);
+      Vnode.push_back(node1);
+      Vnode.push_back(node2);
+      Vnode.push_back(node3);
+      Vnode.push_back(node4);
+      Vnode.push_back(node5);
+      Vnode.push_back(node6);
+      Vnode.push_back(node7);
+      Vnode.push_back(node8);
+      Vnode.push_back(node9);
+      Vnode.push_back(node10);
+      Vnode.push_back(node11);
+      Vnode.push_back(node12);
+      Vnode.push_back(node13);
+    }
+
+    Eigen::Matrix3f TFX(float angle)
+    {
+      Eigen::Matrix3f m;
+      m << 1, 0, 0,
+          0, cos(angle), -sin(angle),
+          0, sin(angle), cos(angle);
+      return m;
+    }
+
+    Eigen::Matrix3f TFY(float angle)
+    {
+      Eigen::Matrix3f m;
+      m << cos(angle), 0, sin(angle),
+          0, 1, 0,
+          -sin(angle), 0, cos(angle);
+      return m;
+    }
+
+    // parent node to child node matrix
+    Eigen::MatrixXf Transform_P2C(std::shared_ptr<node> node)
+    {
+      Eigen::MatrixXf TFMatrix(6, 6);
+      if (node->num == 0)
+      {
+        return Eigen::MatrixXf::Identity(6, 6);
+      }
+      else if (node->num == 1)
+      {
+        TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Identity(),
+            -KF::B2W.inverse() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
+        return TFMatrix;
+      }
+      else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
+      {
+        Eigen::Vector3f P;
+        if (node->num == 2)
+          P << hx, -hy, 0;
+        else if (node->num == 5)
+          P << hx, hy, 0;
+        else if (node->num == 8)
+          P << -hx, -hy, 0;
+        else if (node->num == 11)
+          P << -hx, hy, 0;
+
+        TFMatrix << TFX(KF::jointpos[node->num - 2]).transpose(), Eigen::Matrix3f::Zero(),
+            -TFX(KF::jointpos[node->num - 2]).transpose() * KF::skewSymmetric(P), TFX(KF::jointpos[node->num - 2]).transpose();
+        return TFMatrix;
+      }
+      else
+      {
+        Eigen::Vector3f P;
+        if (node->num == 3)
+          P << 0, -l1, 0;
+        else if (node->num == 6)
+          P << 0, l1, 0;
+        else if (node->num == 9)
+          P << 0, -l1, 0;
+        else if (node->num == 12)
+          P << 0, l1, 0;
+        else
+        {
+          P << 0, 0, -l2;
+        }
+
+        TFMatrix << TFY(KF::jointpos[node->num - 2]).transpose(), Eigen::Matrix3f::Zero(),
+            -TFY(KF::jointpos[node->num - 2]).transpose() * KF::skewSymmetric(P), TFY(KF::jointpos[node->num - 2]).transpose();
+        return TFMatrix;
+      }
+    }
+
+    // make_shared<node>
     // 用零空间求解多任务带优先级的位置 速度 加速度
     // 按任务优先级
     //  广义qdot qddot
@@ -917,11 +1052,25 @@ namespace Quad
     Eigen::MatrixXf Q1(6, 6), Q2(12, 12), G(18, 18), CE, Ce, CI, Ci, Mf, Jcf, Cf, CA, _CA, CA_;
     float kp, kd;
 
-    // multi-Rigid-Body dynamics algorithm
+    // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵
+    vector<Eigen::MatrixXf> Vspace, Aspace, X02I;
 
     Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
       return mat.transpose() * ((mat * mat.transpose()).inverse());
+    }
+
+    // multi-Rigid-Body dynamics algorithm
+    void Dynamcis_Update()
+    {
+      Eigen::MatrixXf V0(6, 1), A0(6, 1);
+      V0.setZero();
+      A0.setZero();
+
+      for (int i = 1; i < 14; ++i)
+      {
+        Vnode[i] = ;
+      }
     }
     void WBC_Update()
     {
@@ -993,5 +1142,4 @@ namespace Quad
     }
 
   };
-
 };
