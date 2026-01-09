@@ -1047,29 +1047,86 @@ namespace Quad
     Eigen::MatrixXf qdot(18, 1), qddot(18, 1), qcmd(18, 1), qdotcmd(18, 1),
         qddotcmd(18, 1), detqcmd(18, 1), q(18, 1), qdotcmde(18, 1), qddotcmde(18, 1);
     // 4个任务雅可比矩阵
-    Eigen::MatrixXf J1, J2(3, 18), J3(3, 18), J4, J1q, J2q, J3q, J4q, e(3, 1), x(3, 1), JA, NA;
+    Eigen::MatrixXf J1, J2(3, 18), J3(3, 18), J4, J1q, J2q(3, 1), J3q(3, 1), J4q, e(3, 1), x(3, 1), JA, NA;
     Eigen::Matrix3f tran2; // 任务2 用的
     Eigen::MatrixXf Q1(6, 6), Q2(12, 12), G(18, 18), CE, Ce, CI, Ci, Mf, Jcf, Cf, CA, _CA, CA_;
     float kp, kd;
 
-    // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵
-    vector<Eigen::MatrixXf> Vspace, Aspace, X02I;
+    // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵   Si从 i=1 开始
+    vector<Eigen::MatrixXf> Vspace, Aspace, X02I, Si, Vji, qidot, Jb;
+    vector<int> pi;
 
     Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
       return mat.transpose() * ((mat * mat.transpose()).inverse());
     }
+    void WBC_Init()
+    {
+      Si[0] = Eigen::MatrixXf::Zero(6, 6); // 没有 Si0 随便初始
+      Si[1] = Eigen::MatrixXf::Identity(6, 6);
+      Si[2] << 1, 0, 0, 0, 0, 0;
+      Si[5] << 1, 0, 0, 0, 0, 0;
+      Si[8] << 1, 0, 0, 0, 0, 0;
+      Si[11] << 1, 0, 0, 0, 0, 0;
 
+      Si[3] << 0, 1, 0, 0, 0, 0;
+      Si[4] << 0, 1, 0, 0, 0, 0;
+      Si[6] << 0, 1, 0, 0, 0, 0;
+      Si[7] << 0, 1, 0, 0, 0, 0;
+      Si[9] << 0, 1, 0, 0, 0, 0;
+      Si[10] << 0, 1, 0, 0, 0, 0;
+      Si[12] << 0, 1, 0, 0, 0, 0;
+      Si[13] << 0, 1, 0, 0, 0, 0;
+
+      X02I[0] = Eigen::MatrixXf::Identity(6, 6);
+      Vspace[0].resize(6, 1);
+      Aspace[0].resize(6, 1);
+      Vspace[0].setZero(6, 1);
+      Aspace[0].setZero(6, 1);
+      J2 << KF::B2W, Eigen::MatrixXf::Zero(3, 15);
+      J3 << Eigen::Matrix3f::Zero(), KF::B2W, Eigen::MatrixXf::Zero(3, 12);
+      pi.push_back(4);
+      pi.push_back(7);
+      pi.push_back(10);
+      pi.push_back(13);
+      Jb[0].resize(6, 18);
+      Jb[1].resize(6, 18);
+      Jb[2].resize(6, 18);
+      Jb[3].resize(6, 18);
+    }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
     {
-      Eigen::MatrixXf V0(6, 1), A0(6, 1);
-      V0.setZero();
-      A0.setZero();
+
+      qidot[0] << KF::Wb, KF::B2W.transpose() * KF::vcom;
+      for (int i = 0; i < 12; ++i)
+      {
+        qidot[i + 1] << KF::jointvel[i];
+      }
 
       for (int i = 1; i < 14; ++i)
       {
-        Vnode[i] = ;
+        X02I[i] = Transform_P2C(Vnode[i]) * X02I[Vnode[i]->parent.lock()->num];
+        Vji[i - 1] = Si[i] * qidot[i - 1];
+        Vspace[i] = Transform_P2C(Vnode[i]) * Vspace[Vnode[i]->parent.lock()->num] + Vji[i - 1];
+        // 缺少 qiddot
+        // Aspace[i] = Transform_P2C(Vnode[i]) * Aspace[Vnode[i]->parent.lock()->num]; //
+      }
+
+      for (int i = 0; i < 4; ++i)
+      {
+        int j = pi[i];
+        Eigen::MatrixXf Xjpi = Eigen::MatrixXf::Identity(6, 6);
+        Jb[i].block(0, pi[i] + 4, 6, 1) = Si[pi[i]];
+        while (Vnode[j]->parent.lock()->num > 0)
+        {
+          Xjpi = Xjpi * Transform_P2C(Vnode[j]);
+          j = Vnode[j]->parent.lock()->num;
+          if (j == 1)
+            Jb[i].block(0, 0, 6, 6) = Xjpi * Si[j];
+          else
+            Jb[i].block(0, j + 4, 6, 1) = Xjpi * Si[j];
+        }
       }
     }
     void WBC_Update()

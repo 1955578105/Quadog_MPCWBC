@@ -13,6 +13,8 @@
 #include <thread>
 #include <memory>
 #include <list>
+#include <vector>
+using namespace vector;
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Eigen::Matrix3f;
