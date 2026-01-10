@@ -1053,12 +1053,28 @@ namespace Quad
     float kp, kd;
 
     // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵   Si从 i=1 开始
-    vector<Eigen::MatrixXf> Vspace, Aspace, X02I, Si, Vji, qidot, Jb;
+    vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ;
+    Eigen::MatrixXf XCi(6, 6), C(18, 1), M(18, 18);
     vector<int> pi;
 
     Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
       return mat.transpose() * ((mat * mat.transpose()).inverse());
+    }
+    Eigen::MatrixXf Vcross(const Eigen::MatrixXf &V)
+    {
+      Eigen::MatrixXf Vx(6, 6);
+      Vx << KF::skewSymmetric(Eigen::Vector3f(V.block(0, 0, 3, 1))), Eigen::Matrix3f::Zero(),
+          KF::skewSymmetric(Eigen::Vector3f(V.block(3, 0, 3, 1))), KF::skewSymmetric(Eigen::Vector3f(V.block(0, 0, 3, 1)));
+      return Vx;
+    }
+
+    Eigen::MatrixXf Fcross(const Eigen::MatrixXf &V)
+    {
+      Eigen::MatrixXf Vx(6, 6);
+      Vx << KF::skewSymmetric(Eigen::Vector3f(V.block(0, 0, 3, 1))), KF::skewSymmetric(Eigen::Vector3f(V.block(3, 0, 3, 1))),
+          Eigen::Matrix3f::Zero(), KF::skewSymmetric(Eigen::Vector3f(V.block(0, 0, 3, 1)));
+      return Vx;
     }
     void WBC_Init()
     {
@@ -1079,10 +1095,13 @@ namespace Quad
       Si[13] << 0, 1, 0, 0, 0, 0;
 
       X02I[0] = Eigen::MatrixXf::Identity(6, 6);
+      X02If[0] = Eigen::MatrixXf::Identity(6, 6);
       Vspace[0].resize(6, 1);
       Aspace[0].resize(6, 1);
       Vspace[0].setZero(6, 1);
       Aspace[0].setZero(6, 1);
+      Aspaced[0].resize(6, 1);
+      Aspaced[0] << 0, 0, 0, 0, 0, 9.81;
       J2 << KF::B2W, Eigen::MatrixXf::Zero(3, 15);
       J3 << Eigen::Matrix3f::Zero(), KF::B2W, Eigen::MatrixXf::Zero(3, 12);
       pi.push_back(4);
@@ -1093,11 +1112,20 @@ namespace Quad
       Jb[1].resize(6, 18);
       Jb[2].resize(6, 18);
       Jb[3].resize(6, 18);
+      Jbi[0].resize(3, 18);
+      Jbi[1].resize(3, 18);
+      Jbi[2].resize(3, 18);
+      Jbi[3].resize(3, 18);
+      XCi << Eigen::Matrix3f::Identity(), Eigen::Matrix3f::Zero(),
+          -KF::skewSymmetric(Eigen::Vector3f(0, 0, -l3)), Eigen::Matrix3f::Identity();
+      J2q << Eigen::MatrixXf::Zero(3, 1);
+      J3q << Eigen::MatrixXf::Zero(3, 1);
     }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
     {
-
+      int J1num = 0;
+      int J4num = 0;
       qidot[0] << KF::Wb, KF::B2W.transpose() * KF::vcom;
       for (int i = 0; i < 12; ++i)
       {
@@ -1107,15 +1135,25 @@ namespace Quad
       for (int i = 1; i < 14; ++i)
       {
         X02I[i] = Transform_P2C(Vnode[i]) * X02I[Vnode[i]->parent.lock()->num];
+        X02If[i] = (X02I[i].inverse()).transpose();
         Vji[i - 1] = Si[i] * qidot[i - 1];
         Vspace[i] = Transform_P2C(Vnode[i]) * Vspace[Vnode[i]->parent.lock()->num] + Vji[i - 1];
-        // 缺少 qiddot
-        // Aspace[i] = Transform_P2C(Vnode[i]) * Aspace[Vnode[i]->parent.lock()->num]; //
+        // 忽略了 qddot 为了求 J1q J4q
+        // 后边不
+        Aspace[i] = Transform_P2C(Vnode[i]) * Aspace[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
+        Aspaced[i] = Transform_P2C(Vnode[i]) * Aspaced[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
+        fi[i - 1] = I[i - 1] * Aspaced[i] + Fcross(Vspace[i]) * (I[i - 1] * Vspace[i]);
+      }
+      // 反推
+      for (int i = 13; i > 0; --i)
+      {
       }
 
       for (int i = 0; i < 4; ++i)
       {
         int j = pi[i];
+        XQi[i] << X02I[pi[i]].block(3, 3, 3, 3).transpose(), Eigen::Matrix3f::Zero(),
+            Eigen::Matrix3f::Zero(), X02I[pi[i]].block(3, 3, 3, 3).transpose();
         Eigen::MatrixXf Xjpi = Eigen::MatrixXf::Identity(6, 6);
         Jb[i].block(0, pi[i] + 4, 6, 1) = Si[pi[i]];
         while (Vnode[j]->parent.lock()->num > 0)
@@ -1126,6 +1164,24 @@ namespace Quad
             Jb[i].block(0, 0, 6, 6) = Xjpi * Si[j];
           else
             Jb[i].block(0, j + 4, 6, 1) = Xjpi * Si[j];
+        }
+        // 转向定向足底坐标系
+        Jbi[i] = (XQi[i] * XCi * Jb[i]).block(3, 0, 3, 18);
+        AspaceQ[i] = (XQi[i] * XCi) * Aspace[pi[i]];
+        VspaceQ[i] = (XQi[i] * XCi) * Vspace[pi[i]];
+
+        if (Gait::sFai[i] == 1) // 支撑腿
+        {
+          J1.block(3 * J1num, 0, 3, 18) = Jbi[i];
+          J1q.block(3 * J1num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + VspaceQ[i].block(0, 0, 3, 1).cross(VspaceQ[i].block(3, 0, 3, 1));
+          J1num++;
+        }
+        else // 摆动腿
+        {
+          J4.block(3 * J4num, 0, 3, 18) = Jbi[i];
+          J4q.block(3 * J4num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + VspaceQ[i].block(0, 0, 3, 1).cross(VspaceQ[i].block(3, 0, 3, 1));
+
+          J4num++;
         }
       }
     }
