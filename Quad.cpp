@@ -701,8 +701,12 @@ namespace Quad
       // 初始化  本体系的惯性矩阵
       Eigen::Matrix3f R = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
       Eigen::Vector3f diaginertia(0.107027, 0.0980771, 0.0244531);
+      float m = 6.291;
       Eigen::Matrix3f I_principal = diaginertia.asDiagonal();
-      BInertia = R * I_principal * (R.transpose());
+      Eigen::Vector3f P(0.021112, 0 ,-0.005366);
+      // 旋转定理 +平行移轴定理
+      BInertia = (R * I_principal * (R.transpose()))+m*(P.transpose()*P*Eigen::Matrix3f::Identity()-P*P.transpose());
+      // 平行移轴定理
 
       // 初始化 B 的固定值
       B.setZero();
@@ -1172,6 +1176,47 @@ namespace Quad
           -KF::skewSymmetric(Eigen::Vector3f(0, 0, -l3)), Eigen::Matrix3f::Identity();
       J2q << Eigen::MatrixXf::Zero(3, 1);
       J3q << Eigen::MatrixXf::Zero(3, 1);
+
+      //
+      vector<Eigen::Vector3f> P;
+      vector<Eigen::Vector4f> quat;
+      vector<float> mass;
+      vector<Eigen::Vector3f> diagnertia;
+      P[0]<<0.021112, 0, -0.005366;
+      mass[0]=6.921;
+      diagnertia[0]<<   0.107027,0.0980771, 0.0244531;
+      P[1]<<0.0054, -0.00194, -0.000105;
+      mass[1]=0.678;
+      diagnertia[1]<<   0.00088403, 0.000596003, 0.000479967;
+      P[2]<<-0.00374, 0.0223 ,-0.0327;
+      mass[2]=1.152;
+      diagnertia[2]<<   0.00594973, 0.00584149 ,0.000878787;
+      P[3]<<0.00629595, 0.000622121, -0.141417;
+      mass[3]=0.241352;
+      diagnertia[3]<<  0.0014901, 0.00146356, 5.31397e-05;
+
+      quat[0]<<-0.000543471, 0.713435, -0.00173769 ,0.700719;
+      quat[1]<<0.498237 ,0.505462, 0.499245,0.497014;
+      quat[2]<<0.551623, -0.0200632, 0.0847635 ,0.829533;
+      quat[3]<<0.703508 ,-0.00450087, 0.00154099 ,0.710672;
+      quat[4]<<0.497014 ,0.499245, 0.505462,0.498237;
+      quat[5]<<0.829533, 0.0847635, -0.0200632 ,0.551623;
+      quat[6]<<0.710672 ,0.00154099 ,-0.00450087, 0.703508;
+      quat[7]<<0.499245 , 0.497014 ,0.498237, 0.505462;
+      quat[8]<<0.551623  ,-0.0200632, 0.0847635, 0.829533;
+      quat[9]<<0.703508  ,-0.00450087 ,0.00154099, 0.710672;
+      quat[10]<<0.505462 ,0.498237 ,0.497014 ,0.499245;
+      quat[11]<<0.829533 ,0.0847635 ,-0.0200632, 0.551623;
+      quat[12]<<0.710672 ,0.00154099 ,-0.00450087, 0.703508;
+      
+      for (int i=0;i<13;++i)
+      {
+        Eigen::Matrix3f R =ConvexMPC::QUa2Mat(quat[i][0],quat[i][1],quat[i][2],quat[i][3]);
+         int r = (i == 0) ? 0 : ((i - 1) % 3 + 1);
+        I[i] = (R*diagnertia[r].asDiagonal()*R.transpose())+m[r]*(P[r].transpose()*P[r]*Eigen::Matrix3f::Identity()-P[r]*P[r].transpose());
+      }
+
+
     }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
@@ -1209,8 +1254,8 @@ namespace Quad
 
             Ic[i-1] = I[i-1];
             for (auto node:Vnode[i]->child)
-            { //TransformF  和 Transform 未定义 注意这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
-              Ic[i-1] = Ic[i-1]+ TransformF(node->num,i)*Ic[node->num]*Transform(i,node->num);
+            { //这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
+              Ic[i-1] = Ic[i-1]+ Transform_C2P(Vnode[node->num])*Ic[node->num]*Transform_P2C(Vnode[node->num]);
             }
             
             if(i==1)
