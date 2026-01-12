@@ -405,7 +405,7 @@ namespace Quad
     Eigen::MatrixXf X(18, 1);
     Eigen::MatrixXf _P(18, 18);
     Eigen::MatrixXf P(18, 18);
-    Eigen::MatrixXf0 Z(28, 1);
+    Eigen::MatrixXf Z(28, 1);
     Eigen::MatrixXf K(18, 28);
 
     Eigen::Matrix3f iden3 = Eigen::Matrix3f::Identity();
