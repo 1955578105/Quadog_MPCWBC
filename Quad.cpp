@@ -1054,7 +1054,7 @@ namespace Quad
       }
       else if (node->num == 1)
       {
-        TFMatrix << KF::B2W, Eigen::Matrix3f::Identity(),
+        TFMatrix << KF::B2W, Eigen::Matrix3f::Zero(),
             KF::B2W * KF::skewSymmetric(KF::pcom), KF::B2W;
         return TFMatrix;
       }
@@ -1092,6 +1092,64 @@ namespace Quad
 
         TFMatrix << TFY(KF::jointpos[node->num - 2]), Eigen::Matrix3f::Zero(),
             TFY(KF::jointpos[node->num - 2])* KF::skewSymmetric(P), TFY(KF::jointpos[node->num - 2]);
+        return TFMatrix;
+      }
+    }
+
+        // Child node to Parent node matrix
+    Eigen::MatrixXf Transform_C2PF(std::shared_ptr<node> node)
+    {
+      Eigen::MatrixXf TFMatrix(6, 6);
+      if (node->num == 0)
+      {
+        return Eigen::MatrixXf::Identity(6, 6);
+      }
+      else if (node->num == 1)
+      {
+        TFMatrix << KF::B2W, 
+        KF::B2W * KF::skewSymmetric(KF::pcom), 
+        Eigen::Matrix3f::Zero(),
+            KF::B2W;
+        return TFMatrix;
+      }
+      else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
+      {
+        Eigen::Vector3f P;
+        if (node->num == 2)
+          P << hx, -hy, 0;
+        else if (node->num == 5)
+          P << hx, hy, 0;
+        else if (node->num == 8)
+          P << -hx, -hy, 0;
+        else if (node->num == 11)
+          P << -hx, hy, 0;
+
+        TFMatrix << TFX(KF::jointpos[node->num - 2]), 
+        TFX(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P), 
+        Eigen::Matrix3f::Zero(),
+            TFX(KF::jointpos[node->num - 2]);
+        return TFMatrix;
+      }
+      else
+      {
+        Eigen::Vector3f P;
+        if (node->num == 3)
+          P << 0, -l1, 0;
+        else if (node->num == 6)
+          P << 0, l1, 0;
+        else if (node->num == 9)
+          P << 0, -l1, 0;
+        else if (node->num == 12)
+          P << 0, l1, 0;
+        else
+        {
+          P << 0, 0, -l2;
+        }
+
+        TFMatrix << TFY(KF::jointpos[node->num - 2]), 
+        TFY(KF::jointpos[node->num - 2])* KF::skewSymmetric(P), 
+        Eigen::Matrix3f::Zero(),
+            TFY(KF::jointpos[node->num - 2]);
         return TFMatrix;
       }
     }
@@ -1213,7 +1271,7 @@ namespace Quad
       {
         Eigen::Matrix3f R =ConvexMPC::QUa2Mat(quat[i][0],quat[i][1],quat[i][2],quat[i][3]);
          int r = (i == 0) ? 0 : ((i - 1) % 3 + 1);
-        I[i] = (R*diagnertia[r].asDiagonal()*R.transpose())+m[r]*(P[r].transpose()*P[r]*Eigen::Matrix3f::Identity()-P[r]*P[r].transpose());
+        I[i] = (R*diagnertia[r].asDiagonal()*R.transpose())+mass[r]*(P[r].transpose()*P[r]*Eigen::Matrix3f::Identity()-P[r]*P[r].transpose());
       }
 
 
@@ -1255,7 +1313,7 @@ namespace Quad
             Ic[i-1] = I[i-1];
             for (auto node:Vnode[i]->child)
             { //这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
-              Ic[i-1] = Ic[i-1]+ Transform_C2P(Vnode[node->num])*Ic[node->num]*Transform_P2C(Vnode[node->num]);
+              Ic[i-1] = Ic[i-1]+ Transform_C2PF(Vnode[node->num])*Ic[node->num]*Transform_P2C(Vnode[node->num]);
             }
             
             if(i==1)
