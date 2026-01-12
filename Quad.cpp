@@ -998,7 +998,7 @@ namespace Quad
       }
       else if (node->num == 1)
       {
-        TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Identity(),
+        TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Zero(),
             -KF::B2W.inverse() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
         return TFMatrix;
       }
@@ -1040,6 +1040,58 @@ namespace Quad
       }
     }
 
+    // Child node to Parent node matrix
+    Eigen::MatrixXf Transform_C2P(std::shared_ptr<node> node)
+    {
+      Eigen::MatrixXf TFMatrix(6, 6);
+      if (node->num == 0)
+      {
+        return Eigen::MatrixXf::Identity(6, 6);
+      }
+      else if (node->num == 1)
+      {
+        TFMatrix << KF::B2W, Eigen::Matrix3f::Identity(),
+            KF::B2W * KF::skewSymmetric(KF::pcom), KF::B2W;
+        return TFMatrix;
+      }
+      else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
+      {
+        Eigen::Vector3f P;
+        if (node->num == 2)
+          P << hx, -hy, 0;
+        else if (node->num == 5)
+          P << hx, hy, 0;
+        else if (node->num == 8)
+          P << -hx, -hy, 0;
+        else if (node->num == 11)
+          P << -hx, hy, 0;
+
+        TFMatrix << TFX(KF::jointpos[node->num - 2]), Eigen::Matrix3f::Zero(),
+            TFX(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P), TFX(KF::jointpos[node->num - 2]);
+        return TFMatrix;
+      }
+      else
+      {
+        Eigen::Vector3f P;
+        if (node->num == 3)
+          P << 0, -l1, 0;
+        else if (node->num == 6)
+          P << 0, l1, 0;
+        else if (node->num == 9)
+          P << 0, -l1, 0;
+        else if (node->num == 12)
+          P << 0, l1, 0;
+        else
+        {
+          P << 0, 0, -l2;
+        }
+
+        TFMatrix << TFY(KF::jointpos[node->num - 2]), Eigen::Matrix3f::Zero(),
+            TFY(KF::jointpos[node->num - 2])* KF::skewSymmetric(P), TFY(KF::jointpos[node->num - 2]);
+        return TFMatrix;
+      }
+    }
+
     // make_shared<node>
     // 用零空间求解多任务带优先级的位置 速度 加速度
     // 按任务优先级
@@ -1053,7 +1105,7 @@ namespace Quad
     float kp, kd;
 
     // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵   Si从 i=1 开始
-    vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ;
+    vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ,I,Ic;
     Eigen::MatrixXf XCi(6, 6), C(18, 1), M(18, 18);
     vector<int> pi;
 
@@ -1139,14 +1191,57 @@ namespace Quad
         Vji[i - 1] = Si[i] * qidot[i - 1];
         Vspace[i] = Transform_P2C(Vnode[i]) * Vspace[Vnode[i]->parent.lock()->num] + Vji[i - 1];
         // 忽略了 qddot 为了求 J1q J4q
-        // 后边不
+        
         Aspace[i] = Transform_P2C(Vnode[i]) * Aspace[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
         Aspaced[i] = Transform_P2C(Vnode[i]) * Aspaced[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
+        // 旋转惯量 没写
         fi[i - 1] = I[i - 1] * Aspaced[i] + Fcross(Vspace[i]) * (I[i - 1] * Vspace[i]);
       }
-      // 反推
+      // 反推 更新C矩阵  更新 Ic 组合刚体 空间惯量
       for (int i = 13; i > 0; --i)
-      {
+      {  
+           if(i==1) C.block(0,0,6,1) = Si[i].transpose()*fi[i-1];
+            else C.block(i+4,0,1,1)=Si[i].transpose()*fi[i-1];
+            if(Vnode[i]->parent.lock()->num!=0)
+            {
+              fi[Vnode[i]->parent.lock()->num-1] = fi[Vnode[i]->parent.lock()->num-1]+ Transform_C2P(Vnode[i])*fi[i-1];
+            }
+
+            Ic[i-1] = I[i-1];
+            for (auto node:Vnode[i]->child)
+            { //TransformF  和 Transform 未定义 注意这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
+              Ic[i-1] = Ic[i-1]+ TransformF(node->num,i)*Ic[node->num]*Transform(i,node->num);
+            }
+            
+            if(i==1)
+            {
+              M.block(0,0,6,6) = Si[i].transpose()*Ic[i-1]*Si[i];
+            }else{
+              M.block(i+4,i+4,1,1) = Si[i].transpose()*Ic[i-1]*Si[i];
+            }
+            int j=i;
+            Eigen::MatrixXf Xt(6,6)=Eigen::MatrixXf::Identity(6,6);
+            while(Vnode[j]->parent.lock()->num>0)
+            {
+              Xt = Xt*Transform_P2C(Vnode[j]);
+              if(Vnode[j]->parent.lock()->num==1)
+              {
+                M.block(i+4,0,1,6)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+
+                M.block(0,i+4,6,1)=M.block(i+4,0,1,6).transpose();
+
+              }
+              else{
+                M.block(i+4,Vnode[j]->parent.lock()->num+4,1,1)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+
+                M.block(Vnode[j]->parent.lock()->num+4,i+4,1,1)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+
+
+              }
+
+              j = Vnode[j]->parent.lock()->num;
+            }
+  
       }
 
       for (int i = 0; i < 4; ++i)
