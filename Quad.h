@@ -14,7 +14,7 @@
 #include <memory>
 #include <list>
 #include <vector>
-using namespace vector;
+
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Eigen::Matrix3f;
@@ -99,6 +99,7 @@ namespace Quad
     extern Eigen::Vector3f Wb;            // 角速度在本体系中的表示
     extern Eigen::Matrix3f WbS;           // 反对称矩阵
     extern Eigen::Vector3f pcom, vcom;
+    extern vector<Eigen::Vector3f> iPb;
   };
 
   namespace KeyboardIns

@@ -284,6 +284,7 @@ namespace Quad
     float Faiz, Faix, Faiy;
     Eigen::Vector3f Wb;  // 角速度在本体系中的表示
     Eigen::Matrix3f WbS; // 反对称矩阵
+    vector<Eigen::Vector3f> iPb;
     Eigen::Matrix3f skewSymmetric(const Eigen::Vector3f &v)
     {
       Eigen::Matrix3f m;
@@ -377,7 +378,10 @@ namespace Quad
       Rripb = {-l2 * sin(jointpos[7]) - l3 * sin(jointpos[7] + jointpos[8]) - hx,
                -l1 * cos(jointpos[6]) + l3 * sin(jointpos[6]) * cos(jointpos[7] + jointpos[8]) + l2 * cos(jointpos[7]) * sin(jointpos[6]) - hy,
                -l1 * sin(jointpos[6]) - l3 * cos(jointpos[6]) * cos(jointpos[7] + jointpos[8]) - l2 * cos(jointpos[6]) * cos(jointpos[7])};
-
+      iPb[0] = Fripb;
+      iPb[1] = Flipb;
+      iPb[2] = Rripb;
+      iPb[3] = Rlipb;
       jocofr << 0, -l2 * cos(jointpos[1]) - l3 * cos(jointpos[1] + jointpos[2]), -l3 * cos(jointpos[1] + jointpos[2]),
           l1 * sin(jointpos[0]) + l3 * cos(jointpos[0]) * cos(jointpos[1] + jointpos[2]) + l2 * cos(jointpos[1]) * cos(jointpos[0]), -l3 * sin(jointpos[0]) * sin(jointpos[1] + jointpos[2]) - l2 * sin(jointpos[1]) * sin(jointpos[0]), -l3 * sin(jointpos[0]) * sin(jointpos[1] + jointpos[2]),
           -l1 * cos(jointpos[0]) + l3 * sin(jointpos[0]) * cos(jointpos[1] + jointpos[2]) + l2 * sin(jointpos[0]) * cos(jointpos[1]), l3 * cos(jointpos[0]) * sin(jointpos[1] + jointpos[2]) + l2 * cos(jointpos[0]) * sin(jointpos[1]), l3 * cos(jointpos[0]) * sin(jointpos[1] + jointpos[2]);
@@ -703,9 +707,9 @@ namespace Quad
       Eigen::Vector3f diaginertia(0.107027, 0.0980771, 0.0244531);
       float m = 6.291;
       Eigen::Matrix3f I_principal = diaginertia.asDiagonal();
-      Eigen::Vector3f P(0.021112, 0 ,-0.005366);
+      Eigen::Vector3f P(0.021112, 0, -0.005366);
       // 旋转定理 +平行移轴定理
-      BInertia = (R * I_principal * (R.transpose()))+m*(P.transpose()*P*Eigen::Matrix3f::Identity()-P*P.transpose());
+      BInertia = (R * I_principal * (R.transpose())) + m * (P.transpose() * P * Eigen::Matrix3f::Identity() - P * P.transpose());
       // 平行移轴定理
 
       // 初始化 B 的固定值
@@ -1091,12 +1095,12 @@ namespace Quad
         }
 
         TFMatrix << TFY(KF::jointpos[node->num - 2]), Eigen::Matrix3f::Zero(),
-            TFY(KF::jointpos[node->num - 2])* KF::skewSymmetric(P), TFY(KF::jointpos[node->num - 2]);
+            TFY(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P), TFY(KF::jointpos[node->num - 2]);
         return TFMatrix;
       }
     }
 
-        // Child node to Parent node matrix
+    // Child node to Parent node matrix
     Eigen::MatrixXf Transform_C2PF(std::shared_ptr<node> node)
     {
       Eigen::MatrixXf TFMatrix(6, 6);
@@ -1106,9 +1110,9 @@ namespace Quad
       }
       else if (node->num == 1)
       {
-        TFMatrix << KF::B2W, 
-        KF::B2W * KF::skewSymmetric(KF::pcom), 
-        Eigen::Matrix3f::Zero(),
+        TFMatrix << KF::B2W,
+            KF::B2W * KF::skewSymmetric(KF::pcom),
+            Eigen::Matrix3f::Zero(),
             KF::B2W;
         return TFMatrix;
       }
@@ -1124,9 +1128,9 @@ namespace Quad
         else if (node->num == 11)
           P << -hx, hy, 0;
 
-        TFMatrix << TFX(KF::jointpos[node->num - 2]), 
-        TFX(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P), 
-        Eigen::Matrix3f::Zero(),
+        TFMatrix << TFX(KF::jointpos[node->num - 2]),
+            TFX(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P),
+            Eigen::Matrix3f::Zero(),
             TFX(KF::jointpos[node->num - 2]);
         return TFMatrix;
       }
@@ -1146,9 +1150,9 @@ namespace Quad
           P << 0, 0, -l2;
         }
 
-        TFMatrix << TFY(KF::jointpos[node->num - 2]), 
-        TFY(KF::jointpos[node->num - 2])* KF::skewSymmetric(P), 
-        Eigen::Matrix3f::Zero(),
+        TFMatrix << TFY(KF::jointpos[node->num - 2]),
+            TFY(KF::jointpos[node->num - 2]) * KF::skewSymmetric(P),
+            Eigen::Matrix3f::Zero(),
             TFY(KF::jointpos[node->num - 2]);
         return TFMatrix;
       }
@@ -1167,7 +1171,7 @@ namespace Quad
     float kp, kd;
 
     // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵   Si从 i=1 开始
-    vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ,I,Ic;
+    vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ, I, Ic;
     Eigen::MatrixXf XCi(6, 6), C(18, 1), M(18, 18);
     vector<int> pi;
 
@@ -1240,41 +1244,39 @@ namespace Quad
       vector<Eigen::Vector4f> quat;
       vector<float> mass;
       vector<Eigen::Vector3f> diagnertia;
-      P[0]<<0.021112, 0, -0.005366;
-      mass[0]=6.921;
-      diagnertia[0]<<   0.107027,0.0980771, 0.0244531;
-      P[1]<<0.0054, -0.00194, -0.000105;
-      mass[1]=0.678;
-      diagnertia[1]<<   0.00088403, 0.000596003, 0.000479967;
-      P[2]<<-0.00374, 0.0223 ,-0.0327;
-      mass[2]=1.152;
-      diagnertia[2]<<   0.00594973, 0.00584149 ,0.000878787;
-      P[3]<<0.00629595, 0.000622121, -0.141417;
-      mass[3]=0.241352;
-      diagnertia[3]<<  0.0014901, 0.00146356, 5.31397e-05;
+      P[0] << 0.021112, 0, -0.005366;
+      mass[0] = 6.921;
+      diagnertia[0] << 0.107027, 0.0980771, 0.0244531;
+      P[1] << 0.0054, -0.00194, -0.000105;
+      mass[1] = 0.678;
+      diagnertia[1] << 0.00088403, 0.000596003, 0.000479967;
+      P[2] << -0.00374, 0.0223, -0.0327;
+      mass[2] = 1.152;
+      diagnertia[2] << 0.00594973, 0.00584149, 0.000878787;
+      P[3] << 0.00629595, 0.000622121, -0.141417;
+      mass[3] = 0.241352;
+      diagnertia[3] << 0.0014901, 0.00146356, 5.31397e-05;
 
-      quat[0]<<-0.000543471, 0.713435, -0.00173769 ,0.700719;
-      quat[1]<<0.498237 ,0.505462, 0.499245,0.497014;
-      quat[2]<<0.551623, -0.0200632, 0.0847635 ,0.829533;
-      quat[3]<<0.703508 ,-0.00450087, 0.00154099 ,0.710672;
-      quat[4]<<0.497014 ,0.499245, 0.505462,0.498237;
-      quat[5]<<0.829533, 0.0847635, -0.0200632 ,0.551623;
-      quat[6]<<0.710672 ,0.00154099 ,-0.00450087, 0.703508;
-      quat[7]<<0.499245 , 0.497014 ,0.498237, 0.505462;
-      quat[8]<<0.551623  ,-0.0200632, 0.0847635, 0.829533;
-      quat[9]<<0.703508  ,-0.00450087 ,0.00154099, 0.710672;
-      quat[10]<<0.505462 ,0.498237 ,0.497014 ,0.499245;
-      quat[11]<<0.829533 ,0.0847635 ,-0.0200632, 0.551623;
-      quat[12]<<0.710672 ,0.00154099 ,-0.00450087, 0.703508;
-      
-      for (int i=0;i<13;++i)
+      quat[0] << -0.000543471, 0.713435, -0.00173769, 0.700719;
+      quat[1] << 0.498237, 0.505462, 0.499245, 0.497014;
+      quat[2] << 0.551623, -0.0200632, 0.0847635, 0.829533;
+      quat[3] << 0.703508, -0.00450087, 0.00154099, 0.710672;
+      quat[4] << 0.497014, 0.499245, 0.505462, 0.498237;
+      quat[5] << 0.829533, 0.0847635, -0.0200632, 0.551623;
+      quat[6] << 0.710672, 0.00154099, -0.00450087, 0.703508;
+      quat[7] << 0.499245, 0.497014, 0.498237, 0.505462;
+      quat[8] << 0.551623, -0.0200632, 0.0847635, 0.829533;
+      quat[9] << 0.703508, -0.00450087, 0.00154099, 0.710672;
+      quat[10] << 0.505462, 0.498237, 0.497014, 0.499245;
+      quat[11] << 0.829533, 0.0847635, -0.0200632, 0.551623;
+      quat[12] << 0.710672, 0.00154099, -0.00450087, 0.703508;
+
+      for (int i = 0; i < 13; ++i)
       {
-        Eigen::Matrix3f R =ConvexMPC::QUa2Mat(quat[i][0],quat[i][1],quat[i][2],quat[i][3]);
-         int r = (i == 0) ? 0 : ((i - 1) % 3 + 1);
-        I[i] = (R*diagnertia[r].asDiagonal()*R.transpose())+mass[r]*(P[r].transpose()*P[r]*Eigen::Matrix3f::Identity()-P[r]*P[r].transpose());
+        Eigen::Matrix3f R = ConvexMPC::QUa2Mat(quat[i][0], quat[i][1], quat[i][2], quat[i][3]);
+        int r = (i == 0) ? 0 : ((i - 1) % 3 + 1);
+        I[i] = (R * diagnertia[r].asDiagonal() * R.transpose()) + mass[r] * (P[r].transpose() * P[r] * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
       }
-
-
     }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
@@ -1294,7 +1296,7 @@ namespace Quad
         Vji[i - 1] = Si[i] * qidot[i - 1];
         Vspace[i] = Transform_P2C(Vnode[i]) * Vspace[Vnode[i]->parent.lock()->num] + Vji[i - 1];
         // 忽略了 qddot 为了求 J1q J4q
-        
+
         Aspace[i] = Transform_P2C(Vnode[i]) * Aspace[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
         Aspaced[i] = Transform_P2C(Vnode[i]) * Aspaced[Vnode[i]->parent.lock()->num] + Vcross(Vspace[i]) * (Si[i] * qidot[i - 1]);
         // 旋转惯量 没写
@@ -1302,49 +1304,50 @@ namespace Quad
       }
       // 反推 更新C矩阵  更新 Ic 组合刚体 空间惯量
       for (int i = 13; i > 0; --i)
-      {  
-           if(i==1) C.block(0,0,6,1) = Si[i].transpose()*fi[i-1];
-            else C.block(i+4,0,1,1)=Si[i].transpose()*fi[i-1];
-            if(Vnode[i]->parent.lock()->num!=0)
-            {
-              fi[Vnode[i]->parent.lock()->num-1] = fi[Vnode[i]->parent.lock()->num-1]+ Transform_C2P(Vnode[i])*fi[i-1];
-            }
+      {
+        if (i == 1)
+          C.block(0, 0, 6, 1) = Si[i].transpose() * fi[i - 1];
+        else
+          C.block(i + 4, 0, 1, 1) = Si[i].transpose() * fi[i - 1];
+        if (Vnode[i]->parent.lock()->num != 0)
+        {
+          fi[Vnode[i]->parent.lock()->num - 1] = fi[Vnode[i]->parent.lock()->num - 1] + Transform_C2P(Vnode[i]) * fi[i - 1];
+        }
 
-            Ic[i-1] = I[i-1];
-            for (auto node:Vnode[i]->child)
-            { //这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
-              Ic[i-1] = Ic[i-1]+ Transform_C2PF(Vnode[node->num])*Ic[node->num]*Transform_P2C(Vnode[node->num]);
-            }
-            
-            if(i==1)
-            {
-              M.block(0,0,6,6) = Si[i].transpose()*Ic[i-1]*Si[i];
-            }else{
-              M.block(i+4,i+4,1,1) = Si[i].transpose()*Ic[i-1]*Si[i];
-            }
-            int j=i;
-            Eigen::MatrixXf Xt(6,6)=Eigen::MatrixXf::Identity(6,6);
-            while(Vnode[j]->parent.lock()->num>0)
-            {
-              Xt = Xt*Transform_P2C(Vnode[j]);
-              if(Vnode[j]->parent.lock()->num==1)
-              {
-                M.block(i+4,0,1,6)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+        Ic[i - 1] = I[i - 1];
+        for (auto node : Vnode[i]->child)
+        { // 这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
+          Ic[i - 1] = Ic[i - 1] + Transform_C2PF(Vnode[node->num]) * Ic[node->num] * Transform_P2C(Vnode[node->num]);
+        }
 
-                M.block(0,i+4,6,1)=M.block(i+4,0,1,6).transpose();
+        if (i == 1)
+        {
+          M.block(0, 0, 6, 6) = Si[i].transpose() * Ic[i - 1] * Si[i];
+        }
+        else
+        {
+          M.block(i + 4, i + 4, 1, 1) = Si[i].transpose() * Ic[i - 1] * Si[i];
+        }
+        int j = i;
+        Eigen::MatrixXf Xt(6, 6) = Eigen::MatrixXf::Identity(6, 6);
+        while (Vnode[j]->parent.lock()->num > 0)
+        {
+          Xt = Xt * Transform_P2C(Vnode[j]);
+          if (Vnode[j]->parent.lock()->num == 1)
+          {
+            M.block(i + 4, 0, 1, 6) = Si[i].transpose() * Ic[i - 1] * Xt * Si[Vnode[j]->parent.lock()->num];
 
-              }
-              else{
-                M.block(i+4,Vnode[j]->parent.lock()->num+4,1,1)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+            M.block(0, i + 4, 6, 1) = M.block(i + 4, 0, 1, 6).transpose();
+          }
+          else
+          {
+            M.block(i + 4, Vnode[j]->parent.lock()->num + 4, 1, 1) = Si[i].transpose() * Ic[i - 1] * Xt * Si[Vnode[j]->parent.lock()->num];
 
-                M.block(Vnode[j]->parent.lock()->num+4,i+4,1,1)=Si[i].transpose()*Ic[i-1]*Xt*Si[Vnode[j]->parent.lock()->num];
+            M.block(Vnode[j]->parent.lock()->num + 4, i + 4, 1, 1) = Si[i].transpose() * Ic[i - 1] * Xt * Si[Vnode[j]->parent.lock()->num];
+          }
 
-
-              }
-
-              j = Vnode[j]->parent.lock()->num;
-            }
-  
+          j = Vnode[j]->parent.lock()->num;
+        }
       }
 
       for (int i = 0; i < 4; ++i)
@@ -1427,14 +1430,27 @@ namespace Quad
         }
         case 2: // 摆动腿
         {
-          // e = dPo - KF::pcom;
-          // x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
-          // JA.block(J1.rows() + 3, 0, 3, 18) = J3;
-          // NA = Eigen::MatrixXf::Identity() - WideInverse(JA) * JA;
-          // detqcmd = detqcmd + WideInverse(J4 * NA) * (e - J4 * detqcmd);
-          // qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVO - J4 * qdotcmde);
-          // qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
-          // break;
+          Eigen::VectorXf ee, Pfoot, dPfoot, Vfoot, dVfoot;
+          int num = 0;
+          for (int j = 0; j < 4; ++j)
+          {
+            if (Gait::sFai[j] == 0)
+            {
+              Pfoot.block(3 * num, 0, 3, 1) = KF::pcom + KF::B2W * KF::iPb[j];
+              Vfoot.block(3 * num, 0, 3, 1) = XQi[j] * XCi * Vspace[pi[j]].block(3, 0, 3, 1);
+              dPfoot.block(3 * num, 0, 3, 1) = Gait::FootdesirePos[j];
+              dVfoot.block(3 * num, 0, 3, 1) = Gait::FootdesireVelocity[j];
+              num++;
+            }
+          }
+          ee = dPfoot - Pfoot;
+          x = kd * (dVfoot - Vfoot) + kp * (ee);
+          JA.block(J1.rows() + 3, 0, 3, 18) = J3;
+          NA = Eigen::MatrixXf::Identity() - WideInverse(JA) * JA;
+          detqcmd = detqcmd + WideInverse(J4 * NA) * (ee - J4 * detqcmd);
+          qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVfoot - J4 * qdotcmde);
+          qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
+          break;
         }
         }
       }
