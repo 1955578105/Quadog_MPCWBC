@@ -131,7 +131,7 @@ namespace Quad
       //
       if (FSM::currentState == FSM::FSMstate::move)
       {
-        Time += 0.002f;
+        Time += 0.002;
         // ⚠️ 修复 3：防止浮点数溢出
         if (Time > 1000.0f * GaitPeriod)
           Time = fmod(Time, GaitPeriod);
@@ -151,6 +151,10 @@ namespace Quad
         GaitPeriod = 0.5;
         stperiod = 0.25;
         swperiod = 0.25;
+
+        // GaitPeriod = 1;
+        // stperiod = 0.75;
+        // swperiod = 0.25;
       }
       else
       {
@@ -283,6 +287,7 @@ namespace Quad
 
         P2[i] = TF_Z(FaiZtouch[i]) * ((TF_Z(KeyboardIns::dWzO * stperiod / 2.0f) * SymPb[i]) - SymPb[i]);
         P3[i] = kp * (KF::vcom - KeyboardIns::dVO);
+
         P4[i] = (KF::pcom[2] / 9.81f) * (KF::vcom.cross(KF::B2W * KF::Wb));
         // ⚠️ 终极修复 3：给落足点动态补偿加死区与限幅，防止交叉绞腿！
         // for (int k = 0; k < 2; k++)
@@ -362,7 +367,7 @@ namespace Quad
       return m;
     }
     // 更新 B2W 旋转矩阵 读取角速度
-    void B2WUpdate(mjModel *model, mjData *data, const std::string &sensor_name)
+    void B2WUpdate(const mjModel *model, mjData *data, const std::string &sensor_name)
     {
       Quat = mujo::get_sensor_data(model, data, sensor_name); // 获得角度
       Eigen::Quaternionf q(Quat[0], Quat[1], Quat[2], Quat[3]);
@@ -381,7 +386,7 @@ namespace Quad
     }
 
     // 获取 关节传感器数据
-    void joint_sensor_data_update(mjModel *model, mjData *data)
+    void joint_sensor_data_update(const mjModel *model, mjData *data)
     {
       jointpos[0] = mujo::get_sensor_data(model, data, "FR_hip_pos")[0];
       jointpos[1] = mujo::get_sensor_data(model, data, "FR_thigh_pos")[0];
@@ -1598,7 +1603,7 @@ namespace Quad
       }
     }
 
-    void WBC_Update(mjModel *model, mjData *data)
+    void WBC_Update(const mjModel *model, mjData *data)
     {
 
       //  std::cout << "WBC_Update" << std::endl;
@@ -1631,10 +1636,9 @@ namespace Quad
       e = tran2 * (dfai - fai);
 
       x = kd * (dwO - KF::B2W * KF::Wb) + kp * (e);
-      std::cout << "+================================================================" << std::endl;
-      std::cout << "Fai error--\n"
-                << dfai - fai << std::endl;
-      std::cout << "W error--\n>" << dwO - KF::B2W * KF::Wb << std::endl;
+      // std::cout << "+================================================================" << std::endl;
+      //   std::cout << "Fai error--\n"<< dfai - fai << std::endl;
+      //  std::cout << "W error--\n>" << dwO - KF::B2W * KF::Wb << std::endl;
 
       detqcmd += WideInverse(J2 * NA) * (e - J2 * detqcmd);
       qdotcmde += WideInverse(J2 * NA) * (dwO - J2 * qdotcmde);
@@ -1652,10 +1656,10 @@ namespace Quad
 
       e = dPo - KF::pcom;
       x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
-      std::cout << "P error--->\n"
-                << e << std::endl;
-      std::cout << "V error-->\n"
-                << dVO - KF::vcom << std::endl;
+      //  std::cout << "P error--->\n"
+      // << e << std::endl;
+      // std::cout << "V error-->\n"
+      // << dVO - KF::vcom << std::endl;
 
       detqcmd += WideInverse(J3 * NA) * (e - J3 * detqcmd);
       qdotcmde += WideInverse(J3 * NA) * (dVO - J3 * qdotcmde);
@@ -1688,10 +1692,10 @@ namespace Quad
         ee = dPfoot - Pfoot;
 
         x = kd * (dVfoot - Vfoot) + kp * (ee);
-        std::cout << "Pfoot error--->\n"
-                  << ee << std::endl;
-        std::cout << "Vfoot error-->\n"
-                  << dVfoot - Vfoot << std::endl;
+        // std::cout << "Pfoot error--->\n"
+        //  << ee << std::endl;
+        // std::cout << "Vfoot error-->\n"
+        // << dVfoot - Vfoot << std::endl;
         detqcmd += WideInverse(J4 * NA) * (ee - J4 * detqcmd);
         qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVfoot - J4 * qdotcmde);
         qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
@@ -1840,7 +1844,7 @@ namespace Quad
     float kp = 28.f; // 依据实际机械特性调整的位置反馈增益
     float kd = 5.f;  // 依据实际机械特性调整的速度反馈增益
     std::vector<float> home = {0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8};
-    void PDcontrol(mjModel *model, mjData *data,
+    void PDcontrol(const mjModel *model, mjData *data,
                    const Eigen::VectorXf &q_des,
                    const Eigen::VectorXf &qdot_des,
                    const Eigen::VectorXf &tau_ff)
@@ -1902,7 +1906,7 @@ namespace Quad
       std::cout << "Quadruped  Initialization Completed!" << std::endl;
     }
     // ⚠️ 新增：军工级一键复位函数
-    void Reset_Robot(mjModel *model, mjData *data, float dt)
+    void Reset_Robot(const mjModel *model, mjData *data, float dt)
     {
       std::cout << "\n[WARNING] XBOX 'A' PRESSED! RESETTING ROBOT STATE...\n"
                 << std::endl;
@@ -1942,7 +1946,7 @@ namespace Quad
     bool first_mpc = false;
 
     // 主控制循环 (通常在 MuJoCo 的控制回调函数中以 500Hz 运行)
-    void Control_Step(mjModel *model, mjData *data, float dt)
+    void Control_Step(const mjModel *model, mjData *data, float dt)
     {
 
       // ⚠️ 终极修复 4：状态机按键防抖，按住不放只触发一次！
@@ -1959,7 +1963,7 @@ namespace Quad
       auto now = std::chrono::high_resolution_clock::now();
       if (std::chrono::duration_cast<std::chrono::milliseconds>(now - enter).count() >= 1000)
       {
-        std::cout << "T--->" << times << std::endl;
+        std::cout << "T--======================================->" << times << std::endl;
         times = 0;
         enter = now;
       }
@@ -1979,7 +1983,7 @@ namespace Quad
 
       static int cout = 0;
       cout++;
-      if (cout % 5 == 0)
+      if (cout % 10 == 0)
       {
         // auto now4 = std::chrono::high_resolution_clock::now();
 
@@ -2004,8 +2008,5 @@ namespace Quad
       }
     }
   }
-  afa::afa()
-  {
-    binaa = 0;
-  }
+
 };

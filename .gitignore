@@ -6,7 +6,8 @@ lib/           # 忽略库文件
 *.a            # 忽略静态库
 *.so           # 忽略动态库
 *.exe          # 忽略 Windows 可执行文件
-
+*.txt
+*.sh
 # --- CMake 产生的中间文件 ---
 CMakeCache.txt
 CMakeFiles/
@@ -19,6 +20,7 @@ basic
 c_cpp_properties.json
 .idea/         # 如果你用 CLion
 *.swp          # Vim 临时文件
+
 
 
 

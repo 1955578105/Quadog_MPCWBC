@@ -48,46 +48,10 @@ extern "C"
 }
 using namespace qpOASES;
 
-// void threadtask(mujoco::Simulate *sim, mjModel *m, mjData *d)
-// {
-
-//   while (!sim->exitrequest.load())
-//   {
-
-//     Quad::SystemControl::Control_Step(m, d, 0.02);
-
-//     // auto enterTime = std::chrono::steady_clock::now();
-
-//     // enterTime += std::chrono::milliseconds(30); // 1khz
-
-//     // std::this_thread::sleep_until(enterTime);
-//   }
-// }
-// void threadMpc(mujoco::Simulate *sim)
-// {
-
-//   // usleep(10000); // Simulate some work
-//   // Qproblem qp(10, 20);
-//   while (!sim->exitrequest.load())
-//   {
-
-//     auto enterTime = std::chrono::steady_clock::now();
-//     if (Quad::SystemControl::first_other)
-//     {
-//       std::cout << "enter" << std::endl;
-//       auto enter = std::chrono::steady_clock::now();
-
-//       Quad::ConvexMPC::UpdateState();
-//       auto out = std::chrono::steady_clock::now();
-//       std::cout << "fa---->" << std::chrono::duration_cast<std::chrono::milliseconds>(out - enter).count() << std::endl;
-//       Quad::SystemControl::first_mpc = true;
-//       std::cout << "out" << std::endl;
-//     }
-//     enterTime += std::chrono::milliseconds(30); // 1khz
-
-//     std::this_thread::sleep_until(enterTime);
-//   }
-// }
+void myController(const mjModel *m, mjData *d)
+{
+  Quad::SystemControl::Control_Step(m, d, MPC_T);
+}
 namespace
 {
   namespace mj = ::mujoco;
@@ -571,6 +535,8 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
       d = mj_makeData(m);
       Quad::SystemControl::System_Init(m, d, MPC_T);
       mj_resetDataKeyframe(m, d, 0);
+
+      mjcb_control = myController;
     }
     if (d)
     {

@@ -8,7 +8,7 @@
 namespace mujo
 {
 
-  std::vector<float> get_sensor_data(mjModel *model, mjData *data,
+  std::vector<float> get_sensor_data(const mjModel *model, mjData *data,
                                      const std::string &sensor_name);
 };
 
