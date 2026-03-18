@@ -47,23 +47,47 @@ extern "C"
 #endif
 }
 using namespace qpOASES;
-void threadMpc(mujoco::Simulate *sim)
-{
 
-  // usleep(10000); // Simulate some work
-  // Qproblem qp(10, 20);
-  while (!sim->exitrequest.load())
-  {
+// void threadtask(mujoco::Simulate *sim, mjModel *m, mjData *d)
+// {
 
-    auto enterTime = std::chrono::steady_clock::now();
+//   while (!sim->exitrequest.load())
+//   {
 
-    
-    enterTime += std::chrono::milliseconds(1000); // 1khz
+//     Quad::SystemControl::Control_Step(m, d, 0.02);
 
-    std::this_thread::sleep_until(enterTime);
-  }
-}
+//     // auto enterTime = std::chrono::steady_clock::now();
 
+//     // enterTime += std::chrono::milliseconds(30); // 1khz
+
+//     // std::this_thread::sleep_until(enterTime);
+//   }
+// }
+// void threadMpc(mujoco::Simulate *sim)
+// {
+
+//   // usleep(10000); // Simulate some work
+//   // Qproblem qp(10, 20);
+//   while (!sim->exitrequest.load())
+//   {
+
+//     auto enterTime = std::chrono::steady_clock::now();
+//     if (Quad::SystemControl::first_other)
+//     {
+//       std::cout << "enter" << std::endl;
+//       auto enter = std::chrono::steady_clock::now();
+
+//       Quad::ConvexMPC::UpdateState();
+//       auto out = std::chrono::steady_clock::now();
+//       std::cout << "fa---->" << std::chrono::duration_cast<std::chrono::milliseconds>(out - enter).count() << std::endl;
+//       Quad::SystemControl::first_mpc = true;
+//       std::cout << "out" << std::endl;
+//     }
+//     enterTime += std::chrono::milliseconds(30); // 1khz
+
+//     std::this_thread::sleep_until(enterTime);
+//   }
+// }
 namespace
 {
   namespace mj = ::mujoco;
@@ -479,8 +503,16 @@ namespace
 
                 // call mj_step
                 mj_step(m, d);
-                //  mufunction_
-                //  myfunction();
+                // static int step = 0;
+                // step++;
+                // if (step % 10 == 0)
+                // {
+                // auto enter = std::chrono::steady_clock::now();
+                Quad::SystemControl::Control_Step(m, d, 0.02);
+                // auto end = std::chrono::steady_clock::now();
+                //  std::cout << "tim2------>" << std::chrono::duration_cast<std::chrono::milliseconds>(end - enter).count() << std::endl;
+                //   step = 0;
+                // }
 
                 const char *message = Diverged(m->opt.disableflags, d);
                 if (message)
@@ -537,14 +569,21 @@ void PhysicsThread(mj::Simulate *sim, const char *filename)
       const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
 
       d = mj_makeData(m);
+      Quad::SystemControl::System_Init(m, d, MPC_T);
+      mj_resetDataKeyframe(m, d, 0);
     }
     if (d)
     {
+
       sim->Load(m, d, filename);
 
       // lock the sim mutex
+      // std::thread thread(&threadtask, sim, m, d);
+      // thread.join();
       const std::unique_lock<std::recursive_mutex> lock(sim->mtx);
 
+      // std::thread mpcthread(&threadMpc, sim);
+      // mpcthread.detach();
       mj_forward(m, d);
     }
     else
@@ -615,16 +654,20 @@ int main(int argc, char **argv)
   //   filename = argv[1];
   // }
 
-  std::thread mpcthread(threadMpc, sim.get());
-  std::thread Keythread(Quad::KeyboardIns::Update_ins, sim.get());
+  // std::thread mpcthread(threadMpc, sim.get());
   //  start physics thread
+
   std::thread physicsthreadhandle(&PhysicsThread, sim.get(), filename);
+  std::thread Keythread(Quad::KeyboardIns::Update_ins);
 
   // start simulation UI loop (blocking call)
+
   sim->RenderLoop();
+
   physicsthreadhandle.join();
-  mpcthread.join();
-  Keythread.join();
+  Keythread.detach();
+
+  // mpcthread.join();
 
   return 0;
 }

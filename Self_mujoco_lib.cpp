@@ -6,7 +6,7 @@
 namespace mujo
 {
   // 根据 传感器的名 返回 传感器数据
-  std::vector<float> get_sensor_data(const mjModel *model, const mjData *data,
+  std::vector<float> get_sensor_data(mjModel *model, mjData *data,
                                      const std::string &sensor_name)
   {
     // 1. 先获取 id

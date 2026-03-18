@@ -1,7 +1,11 @@
+
+
+
+
 <mujoco model="go2">
   <compiler angle="radian" meshdir="assets" autolimits="true" />
 
-  <option cone="elliptic" impratio="100" />
+  <option cone="elliptic" impratio="100" timestep="0.002" />
 
   <default>
 
@@ -29,8 +33,8 @@
 
       <!-- 小腿关节的 -->
       <default class="knee">
-      <joint range="-2.7227 2"/> 
-        <!-- <joint range="-2.7227 -0.83776"/>  -->
+      <!-- <joint range="-2.7227 2"/>  -->
+        <joint range="-2.7227 -0.83776"/> 
         <motor ctrlrange="-45.43 45.43"/>
       </default>
     
@@ -252,18 +256,18 @@
     <motor class="abduction" name="RL_hip" joint="RL_hip_joint"  />
     <motor class="hip" name="RL_thigh" joint="RL_thigh_joint"  />
     <motor class="knee" name="RL_calf" joint="RL_calf_joint" />
-    <!-- <position class="abduction" name="FR_hip" joint="FR_hip_joint" kv="10" />
-    <position class="hip" name="FR_thigh" joint="FR_thigh_joint"   />
-    <position class="knee" name="FR_calf" joint="FR_calf_joint"  />
-    <position class="abduction" name="FL_hip" joint="FL_hip_joint"  />
-    <position class="hip" name="FL_thigh" joint="FL_thigh_joint"  />
-    <position class="knee" name="FL_calf" joint="FL_calf_joint"  />
-    <position class="abduction" name="RR_hip" joint="RR_hip_joint"  />
-    <position class="hip" name="RR_thigh" joint="RR_thigh_joint"  />
-    <position class="knee" name="RR_calf" joint="RR_calf_joint"  />
-    <position class="abduction" name="RL_hip" joint="RL_hip_joint"  />
-    <position class="hip" name="RL_thigh" joint="RL_thigh_joint"  />
-    <position class="knee" name="RL_calf" joint="RL_calf_joint"  ctrlrange="-1.57 1.57"/> -->
+    <!-- <position class="abduction" name="FR_hip" joint="FR_hip_joint" kp="100" kv="1" />
+    <position class="hip" name="FR_thigh" joint="FR_thigh_joint"   kp="100" kv="1"/>
+    <position class="knee" name="FR_calf" joint="FR_calf_joint"  kp="100" kv="1"/>
+    <position class="abduction" name="FL_hip" joint="FL_hip_joint"  kp="100" kv="1"/>
+    <position class="hip" name="FL_thigh" joint="FL_thigh_joint"  kp="100" kv="1"/>
+    <position class="knee" name="FL_calf" joint="FL_calf_joint"  kp="100" kv="1"/>
+    <position class="abduction" name="RR_hip" joint="RR_hip_joint" kp="100" kv="1" />
+    <position class="hip" name="RR_thigh" joint="RR_thigh_joint"  kp="100" kv="1"/>
+    <position class="knee" name="RR_calf" joint="RR_calf_joint"  kp="100" kv="1"/>
+    <position class="abduction" name="RL_hip" joint="RL_hip_joint"  kp="100" kv="1"/>
+    <position class="hip" name="RL_thigh" joint="RL_thigh_joint"  kp="100" kv="1"/>
+    <position class="knee" name="RL_calf" joint="RL_calf_joint"  kp="100" kv="1"/> -->
   </actuator>
 
   <sensor>
@@ -326,3 +330,10 @@
       ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8" />
   </keyframe>
 </mujoco>
+
+
+
+
+
+
+

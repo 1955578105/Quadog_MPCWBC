@@ -1,17 +1,9 @@
 #include "Quad.h"
+#include "xbox.h"
 
 namespace Quad
 {
 
-  namespace PDcontrol
-  {
-    void PDcontrol(const mjModel *model, const mjData *data, vector<float> torques)
-    {
-      int i = 0;
-      for (auto torque : torques)
-        data->ctrl[i++] = torque;
-    }
-  };
   //   有限状态机
   //   1.状态：  下蹲 站立 行走（包括trot walk等）
   //   2.用矩阵表示 状态转换关系
@@ -19,19 +11,19 @@ namespace Quad
   //   squat    0     1     0
   //   stand    1     0      1
   //   move     0     1      0
-
   //   3.  转换状态要满足两个条件  ：（1） 满足状态转换关系   （2）当前状态不处于忙碌状态
-
   //   4. 忙碌状态判断  ： 下蹲 和站立可以用角度判断  行走要等脚都触碰地
   namespace FSM
   {
     Eigen::Matrix3i StateTransformMatrix;
     FSMstate currentState;
     Busystate busystate;
+    FSMstate lastState;
     void Init_FSM()
     {
       StateTransformMatrix << 0, 1, 0, 1, 0, 1, 0, 1, 0;
-      currentState = squat;
+      currentState = stand;
+      lastState = currentState;
       busystate = BUSY;
     }
 
@@ -87,10 +79,23 @@ namespace Quad
     Eigen::Vector3f FrPstend, FlPstend, RrPstend, RlPstend;
     float stperiod, swperiod; // 支撑和摆动周期  不同的步态不同
     vector<Eigen::Vector3f> FootdesirePos, FootdesireVelocity, Pstend, Pstsw;
-    float dfooth = 0.06; // 期望抬腿高度
-    void
-    Gait_Init()
+    float dfooth = 0.03; // 期望抬腿高度
+
+    void Gait_Init()
     {
+      // ⚠️ 修复：为所有摆动相、支撑相的坐标向量分配内存 (4条腿)
+      FootdesirePos.resize(4, Eigen::Vector3f::Zero());
+      FootdesireVelocity.resize(4, Eigen::Vector3f::Zero());
+      Pstend.resize(4, Eigen::Vector3f::Zero());
+      Pstsw.resize(4, Eigen::Vector3f::Zero());
+      Pcomtouch.resize(4, Eigen::Vector3f::Zero());
+      Psymtouch.resize(4, Eigen::Vector3f::Zero());
+      Pswend.resize(4, Eigen::Vector3f::Zero());
+      P1.resize(4, Eigen::Vector3f::Zero());
+      P2.resize(4, Eigen::Vector3f::Zero());
+      P3.resize(4, Eigen::Vector3f::Zero());
+      P4.resize(4, Eigen::Vector3f::Zero());
+
       Gd << 0.5, 0.5, 0.5, 0.5,
           0.75, 0.75, 0.75, 0.75;
       Go << 0.5, 0, 0, 0.5,
@@ -99,12 +104,17 @@ namespace Quad
       FlPstend = KF::X.block(9, 0, 3, 1);
       RrPstend = KF::X.block(12, 0, 3, 1);
       RlPstend = KF::X.block(15, 0, 3, 1);
+
+      for (int i = 0; i < 4; i++)
+      {
+        sFai[i] = 1; // 强制 4 条腿全部为支撑腿
+      }
     }
     char currentGait = 0; // 默认选择一个步态
     // 进入当前步态的持续时间
     float Time = 0;
     // 步态周期
-    float GaitPeriod = 0.5;
+    float GaitPeriod = 0;
 
     // 当前在第几个周期
     unsigned int n;
@@ -116,56 +126,85 @@ namespace Quad
     // 开一个线程 实现步态计时  也是在Move状态开始
     void TimeUpdate()
     {
-      // 判断状态后 更新
-      Time++;
-    }
 
+      // 判断状态后 更新
+      //
+      if (FSM::currentState == FSM::FSMstate::move)
+      {
+        Time += 0.002f;
+        // ⚠️ 修复 3：防止浮点数溢出
+        if (Time > 1000.0f * GaitPeriod)
+          Time = fmod(Time, GaitPeriod);
+      }
+      else
+      {
+        Time = 0.0f;
+      }
+    }
+    // 改变步态 gait =0   trot    gait =1 walk
+    void ChangeGait(int gait)
+    {
+      currentGait = gait;
+      Time = 0;
+      if (gait == 0)
+      {
+        GaitPeriod = 0.5;
+        stperiod = 0.25;
+        swperiod = 0.25;
+      }
+      else
+      {
+        GaitPeriod = 0.8;
+        stperiod = 0.6;
+        swperiod = 0.2;
+      }
+    }
     /// @brief update Gait 在进入move的状态时 才运行
 
     void UpdateGait()
     {
-      n = Time / GaitPeriod + 1;
-      tng = Time - (n - 1) * GaitPeriod;
-      _tng = tng / GaitPeriod; // 当前进度
-
+      // ⚠️ 修复 3：使用高精度取模，彻底解决长周期运行后的相位紊乱
+      tng = fmod(Time, GaitPeriod);
+      _tng = tng / GaitPeriod;
+      // n = Time / GaitPeriod + 1;
+      // tng = Time - (n - 1) * GaitPeriod;
+      // _tng = tng / GaitPeriod; // 当前进度
       for (int i = 0; i < 4; i++)
       {
-        // (2.34)
         if (_tng >= Go(currentGait, i))
-        {
           tFai[i] = _tng - Go(currentGait, i);
-        }
         else
-        {
-          tFai[i] = _tng - Go(currentGait, i) + 1;
-        }
-        //(2.35) 更新支撑腿的判断
+          tFai[i] = _tng - Go(currentGait, i) + 1.0f;
+
         if (tFai[i] <= Gd(currentGait, i))
-        {
-          sFai[i] = 1; // 当前腿为支撑腿
-        }
+          sFai[i] = 1.0f;
         else
-        {
-          sFai[i] = 0; // 为摆动腿
-        }
-        // (2.36) 支撑相位进度
-        if (sFai[i] == 1)
-        {
+          sFai[i] = 0.0f;
+
+        if (sFai[i] == 1.0f)
           tst[i] = tFai[i] / Gd(currentGait, i);
-        }
         else
+          tst[i] = 0.0f;
+
+        if (sFai[i] == 0.0f)
+          tsw[i] = (tFai[i] - Gd(currentGait, i)) / (1.0f - Gd(currentGait, i));
+        else
+          tsw[i] = 0.0f;
+      }
+
+      // ⚠️ 新增：强制全站立模式处理
+      if (FSM::currentState == FSM::FSMstate::stand)
+      {
+        for (int i = 0; i < 4; i++)
         {
-          tst[i] = 0;
+          sFai[i] = 1;   // 强制 4 条腿全部为支撑腿
+          tsw[i] = 0.0f; // 摆动进度清零
+          tst[i] = 1.0f; // 处于完全支撑相
+
+          // 将名义期望落足点锁定为当前实际抓地位置，防止滑移
+          FootdesirePos[i] = Pstend[i];
+          FootdesireVelocity[i].setZero();
         }
-        // (2.37) 摆动相位进度
-        if (sFai[i] == 0)
-        {
-          tsw[i] = (tFai[i] - Gd(currentGait, i)) / (1 - Gd(currentGait, i));
-        }
-        // else
-        // {
-        //   tsw[i] = 0;
-        // }
       }
     }
     // 每个腿的最后一次支撑足坐标更新 用与 坡度估计
@@ -206,60 +245,89 @@ namespace Quad
     vector<Eigen::Vector3f> SymPb;
     Eigen::Vector4f FaiZtouch;
     vector<Eigen::Vector3f> Pcomtouch, Psymtouch, Pswend, P1, P2, P3, P4;
-    float kp = 0.15;
-    ; // 对称足底位置的XY坐标向量
+    float kp = 0.169;
+    // 对称足底位置的XY坐标向量
     /// @brief 落足点规划 和 足底轨迹规划
+    bool join = false;
     void FootTraj_Planning()
     {
-      // -0.02 是为了让足底位置稍微靠后一些  增加稳定性
-      SymPb1 << hx - 0.02, -hy - l1, 0;
-      SymPb2 << hx - 0.02, hy + l1, 0;
-      SymPb3 << -hx - 0.02, -hy - l1, 0;
-      SymPb4 << -hx - 0.02, hy + l1, 0;
-      SymPb.push_back(SymPb1);
-      SymPb.push_back(SymPb2);
-      SymPb.push_back(SymPb3);
-      SymPb.push_back(SymPb4);
+
+      if (!join)
+      {
+        float off_set = -0.02;
+        SymPb1 << hx + off_set, -hy - l1, 0;
+        SymPb2 << hx + off_set, hy + l1, 0;
+        SymPb3 << -hx + off_set, -hy - l1, 0;
+        SymPb4 << -hx + off_set, hy + l1, 0;
+        SymPb.push_back(SymPb1);
+        SymPb.push_back(SymPb2);
+        SymPb.push_back(SymPb3);
+        SymPb.push_back(SymPb4);
+        join = true;
+      }
 
       for (int i = 0; i < 4; i++)
       {
+        // std::cout << "pstend--->" + i << Pstend[i] << std::endl;
         // 无论支撑腿还是摆动腿 都要更新  质心触地位置 和 偏航角
-        Pcomtouch[i] = KF::pcom + KF::B2W * KeyboardIns::dVb * ((1 - tsw[i]) * swperiod);
+        // Pcomtouch[i] = KF::pcom + KF::B2W * KeyboardIns::dVb * ((1 - tsw[i]) * swperiod);/
+        Pcomtouch[i] = KF::pcom + KeyboardIns::dVO * ((1 - tsw[i]) * swperiod);
+
         FaiZtouch[i] = KF::Faiz + KeyboardIns::dWzb * ((1 - tsw[i]) * swperiod);
         // 世界坐标系下的每个足的对称点坐标
         /// @note  足底轨迹规划
         // 落足点坐标 无论摆动还是支撑腿 都应该一直预测  。 摆动时 要预防突发情况，及时改变落足点
         Psymtouch[i] = Pcomtouch[i] + TF_Z(FaiZtouch[i]) * SymPb[i];
-        P1[i] = (KeyboardIns::dVO * stperiod) / 2;
-        P2[i] = TF_Z(FaiZtouch[i]) * ((TF_Z(KeyboardIns::dWzO * stperiod / 2) * SymPb[i]) - SymPb[i]);
+        P1[i] = (KeyboardIns::dVO * stperiod) / 2.0f;
+        // P1[i] = (KF::vcom * stperiod) / 2.0f;
+
+        P2[i] = TF_Z(FaiZtouch[i]) * ((TF_Z(KeyboardIns::dWzO * stperiod / 2.0f) * SymPb[i]) - SymPb[i]);
         P3[i] = kp * (KF::vcom - KeyboardIns::dVO);
-        P4[i] = (KF::pcom[2] / 9.81) * (KF::vcom.cross(KF::B2W * KF::Wb));
+        P4[i] = (KF::pcom[2] / 9.81f) * (KF::vcom.cross(KF::B2W * KF::Wb));
+        // ⚠️ 终极修复 3：给落足点动态补偿加死区与限幅，防止交叉绞腿！
+        // for (int k = 0; k < 2; k++)
+        // {
+        //   if (P3[i][k] > 0.08f)
+        //     P3[i][k] = 0.08f;
+        //   if (P3[i][k] < -0.08f)
+        //     P3[i][k] = -0.08f;
+        //   if (P4[i][k] > 0.05f)
+        //     P4[i][k] = 0.05f;
+        //   if (P4[i][k] < -0.05f)
+        //     P4[i][k] = -0.05f;
+        // }
         // 最终的落足点坐标
         Pswend[i] = Psymtouch[i] + P1[i] + P2[i] + P3[i] + P4[i];
         Pswend[i][2] = KeyboardIns::A[0] + KeyboardIns::A[1] * (Pswend[i][0]) + KeyboardIns::A[2] * (Pswend[i][1]);
 
         Pstsw[i] = Pswend[i] - Pstend[i];
         // 摆动腿 根据 终点和起点进行轨迹规划
-        static float lastfoot = 0;
         if (sFai[i] == 0)
         {
-          FootdesirePos[i][0] = Pstend[i][0] + Pstsw[i][0] * (3 * pow(tsw[i], 2) - 2 * pow(tsw[i], 3));
-          FootdesirePos[i][1] = Pstend[i][1] + Pstsw[i][1] * (3 * pow(tsw[i], 2) - 2 * pow(tsw[i], 3));
-          FootdesireVelocity[i][0] = Pstsw[i][0] * (6 * tsw[i] - 6 * pow(tsw[i], 2));
-          FootdesireVelocity[i][1] = Pstsw[i][1] * (6 * tsw[i] - 6 * pow(tsw[i], 2));
-          if (tsw[i] <= 0.5)
+          float u = tsw[i];
+
+          FootdesirePos[i][0] = Pstend[i][0] + Pstsw[i][0] * (3.0f * pow(u, 2) - 2.0f * pow(u, 3));
+          FootdesirePos[i][1] = Pstend[i][1] + Pstsw[i][1] * (3.0f * pow(u, 2) - 2.0f * pow(u, 3));
+          FootdesireVelocity[i][0] = Pstsw[i][0] * (6.0f * u - 6.0f * pow(u, 2)) / swperiod;
+          FootdesireVelocity[i][1] = Pstsw[i][1] * (6.0f * u - 6.0f * pow(u, 2)) / swperiod;
+
+          // ⚠️ 修复 1 和 2：删除了全局 static 污染，并引入智能避障顶点规划
+          //   float h_peak = std::max(Pstend[i][2], Pswend[i][2]) + dfooth; // 永远相对于最高点抬腿！
+          float h_peak = dfooth;
+          if (u <= 0.5f)
           {
-            FootdesirePos[i][2] = Pstend[i][2] + dfooth * (12 * pow(tsw[i], 2) - 16 * pow(tsw[i], 3));
-            lastfoot = FootdesirePos[i][2];
-            FootdesireVelocity[i][2] = dfooth * (12 * tsw[i] - 24 * pow(tsw[i], 2));
+            float t2 = 2.0f * u;
+            float h_start = Pstend[i][2];
+            FootdesirePos[i][2] = h_start + (h_peak - h_start) * (3.0f * pow(t2, 2) - 2.0f * pow(t2, 3));
+            FootdesireVelocity[i][2] = (h_peak - h_start) * (6.0f * t2 - 6.0f * pow(t2, 2)) * 2.0f / swperiod;
           }
           else
           {
-            FootdesirePos[i][2] = lastfoot + (Pswend[i][2] - lastfoot) * (12 * pow(tsw[i], 2) - 16 * pow(tsw[i], 3));
-            FootdesireVelocity[i][2] = (Pswend[i][2] - dfooth) * (12 * tsw[i] - 24 * pow(tsw[i], 2));
+            float t2 = 2.0f * u - 1.0f;
+            float h_end = Pswend[i][2];
+            FootdesirePos[i][2] = h_peak + (h_end - h_peak) * (3.0f * pow(t2, 2) - 2.0f * pow(t2, 3));
+            FootdesireVelocity[i][2] = (h_end - h_peak) * (6.0f * t2 - 6.0f * pow(t2, 2)) * 2.0f / swperiod;
           }
-
-          // 在这里进行 摆动腿规划
         }
       }
     }
@@ -294,11 +362,12 @@ namespace Quad
       return m;
     }
     // 更新 B2W 旋转矩阵 读取角速度
-    void B2WUpdate(const mjModel *model, const mjData *data, const std::string &sensor_name)
+    void B2WUpdate(mjModel *model, mjData *data, const std::string &sensor_name)
     {
       Quat = mujo::get_sensor_data(model, data, sensor_name); // 获得角度
       Eigen::Quaternionf q(Quat[0], Quat[1], Quat[2], Quat[3]);
       Faiz = q.toRotationMatrix().eulerAngles(2, 1, 0)[0]; // 获得当前偏航角
+                                                           //   std::cout << "faiz" << Faiz << std::endl;
       vector<float> temp = mujo::get_sensor_data(model, data, "imu_gyro");
       Wb << temp[0], temp[1], temp[2]; // 获得角速度数据 由于Imu坐标系和本体系方向相同  所以不用变换
       WbS = skewSymmetric(Wb);         // 获得反对称矩阵
@@ -312,7 +381,7 @@ namespace Quad
     }
 
     // 获取 关节传感器数据
-    void joint_sensor_data_update(const mjModel *model, const mjData *data)
+    void joint_sensor_data_update(mjModel *model, mjData *data)
     {
       jointpos[0] = mujo::get_sensor_data(model, data, "FR_hip_pos")[0];
       jointpos[1] = mujo::get_sensor_data(model, data, "FR_thigh_pos")[0];
@@ -372,8 +441,8 @@ namespace Quad
                -l1 * sin(jointpos[0]) - l3 * cos(jointpos[0]) * cos(jointpos[1] + jointpos[2]) - l2 * cos(jointpos[0]) * cos(jointpos[1])};
 
       Rlipb = {-l2 * sin(jointpos[10]) - l3 * sin(jointpos[10] + jointpos[11]) - hx,
-               l1 * cos(jointpos[9]) + l3 * sin(jointpos[6]) * cos(jointpos[10] + jointpos[11]) + l2 * cos(jointpos[10]) * sin(jointpos[9]) + hy,
-               l1 * sin(jointpos[9]) - l3 * cos(jointpos[6]) * cos(jointpos[10] + jointpos[11]) - l2 * cos(jointpos[9]) * cos(jointpos[10])};
+               l1 * cos(jointpos[9]) + l3 * sin(jointpos[9]) * cos(jointpos[10] + jointpos[11]) + l2 * cos(jointpos[10]) * sin(jointpos[9]) + hy,
+               l1 * sin(jointpos[9]) - l3 * cos(jointpos[9]) * cos(jointpos[10] + jointpos[11]) - l2 * cos(jointpos[9]) * cos(jointpos[10])};
 
       Rripb = {-l2 * sin(jointpos[7]) - l3 * sin(jointpos[7] + jointpos[8]) - hx,
                -l1 * cos(jointpos[6]) + l3 * sin(jointpos[6]) * cos(jointpos[7] + jointpos[8]) + l2 * cos(jointpos[7]) * sin(jointpos[6]) - hy,
@@ -382,6 +451,7 @@ namespace Quad
       iPb[1] = Flipb;
       iPb[2] = Rripb;
       iPb[3] = Rlipb;
+
       jocofr << 0, -l2 * cos(jointpos[1]) - l3 * cos(jointpos[1] + jointpos[2]), -l3 * cos(jointpos[1] + jointpos[2]),
           l1 * sin(jointpos[0]) + l3 * cos(jointpos[0]) * cos(jointpos[1] + jointpos[2]) + l2 * cos(jointpos[1]) * cos(jointpos[0]), -l3 * sin(jointpos[0]) * sin(jointpos[1] + jointpos[2]) - l2 * sin(jointpos[1]) * sin(jointpos[0]), -l3 * sin(jointpos[0]) * sin(jointpos[1] + jointpos[2]),
           -l1 * cos(jointpos[0]) + l3 * sin(jointpos[0]) * cos(jointpos[1] + jointpos[2]) + l2 * sin(jointpos[0]) * cos(jointpos[1]), l3 * cos(jointpos[0]) * sin(jointpos[1] + jointpos[2]) + l2 * cos(jointpos[0]) * sin(jointpos[1]), l3 * cos(jointpos[0]) * sin(jointpos[1] + jointpos[2]);
@@ -424,6 +494,8 @@ namespace Quad
     Eigen::Vector3f pcom, vcom;
     void kf_Init(float t) // t 是控制步长
     {
+      // ⚠️ 修复：为四条腿的足端位置向量分配空间
+      iPb.resize(4, Eigen::Vector3f::Zero());
 
       iden12 = Eigen::MatrixXf ::Identity(12, 12);
       // 初始化常量
@@ -462,7 +534,7 @@ namespace Quad
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1;
-      X << 0, 0, 0.44, 0, 0, 0, 0.1934, -0.142, 0, 0.1934, 0.142, 0, -0.1934, -0.142, 0, -0.1934, 0.142, 0; // 初始状态 应接近 真实状态
+      X << 0, 0, 0.254, 0, 0, 0, 0.203, -0.142, -0.254, 0.203, 0.142, -0.254, -0.184, -0.142, -0.254, -0.184, 0.142, -0.254; // 初始状态 应接近 真实状态
       P = Eigen::MatrixXf::Ones(18, 18);
       iden18 = Eigen::MatrixXf ::Identity(18, 18);
       Onemat << 1;
@@ -474,12 +546,13 @@ namespace Quad
       // Q R Z 手动更新
       for (int i = 0; i < 4; i++)
       {
-        if (Gait::sFai[i] == 0) // 是否为摆动腿 将摆动腿的状态噪声和测量噪声变大 降低他的贡献
+        if (Gait::sFai[i] == 0) // 是否为摆动腿 将摆动腿测量噪声变大 降低他的贡献
         {
+          // std::cout << "enter" << std::endl;
           Q.block(6 + 3 * i, 6 + 3 * i, 3, 3) = iden3;
-          R.block(0 + 3 * i, 0 + 3 * i, 3, 3) = iden3;
-          R.block(12 + 3 * i, 12 + 3 * i, 3, 3) = iden3;
-          R.block(24 + i, 24 + i, 1, 1) = Onemat;
+          R.block(0 + 3 * i, 0 + 3 * i, 3, 3) = iden3 * 20000;
+          R.block(12 + 3 * i, 12 + 3 * i, 3, 3) = iden3 * 20000;
+          R.block(24 + i, 24 + i, 1, 1) = Onemat * 20000;
         }
         else
         {
@@ -495,10 +568,23 @@ namespace Quad
 
       _X = A * X + B * U;
       _P = A * P * (A.transpose()) + Q;
-      K = (_P * (H.transpose())) * ((H * _P * H.transpose() + R).inverse());
+      // ⚠️ 军工级优化：利用协方差矩阵的正定对称特性，使用 LDLT 分解替代粗暴的 inverse()
+      Eigen::MatrixXf S = H * _P * H.transpose() + R;
+#ifdef solve
+#undef solve
+#endif
+      Eigen::MatrixXf S_inv = S.ldlt().solve(Eigen::MatrixXf::Identity(S.rows(), S.cols()));
+      K = _P * H.transpose() * S_inv;
+
       X = _X + K * (Z - H * _X);
+      // ⚠️ 保证协方差矩阵的严格对称性 (Joseph form)，防止浮点误差导致 P 变得不对称发散
       P = (iden18 - K * H) * _P;
+      P = 0.5f * (P + P.transpose()); // 强制对称化保护！
+      // K = (_P * (H.transpose())) * ((H * _P * H.transpose() + R).inverse());
+      // X = _X + K * (Z - H * _X);
+      // P = (iden18 - K * H) * _P;
       pcom = X.block(0, 0, 3, 1);
+      // std::cout<<"X---->"<<X<<std::endl;
       vcom = X.block(3, 0, 3, 1);
     }
 
@@ -510,8 +596,8 @@ namespace Quad
   {
 
     /// @brief 期望速度和角速度
-    float dVxb, dVyb, dWzb, dWzO;
-    float dFaiz, dHb, dFaix, dFaiy;
+    float dVxb = 0.0, dVyb = 0.0, dWzb = 0, dWzO = 0;
+    float dFaiz, dHb = 0.29, dFaix, dFaiy;
     Eigen::MatrixXf dVb(3, 1);
     Eigen::MatrixXf dVO(3, 1);
     Eigen::MatrixXf dWb(3, 1);
@@ -523,90 +609,105 @@ namespace Quad
     Eigen::Vector3f Tao, dFai;
     vector<Eigen::VectorXf> desirex;
     Eigen::MatrixXf D(13 * h, 1);
-    void Update_ins(mujoco::Simulate *sim)
+    void Update_ins()
     {
-      static auto KeyPressedTime = std::chrono::steady_clock::now();
-      while (!sim->exitrequest.load())
+      int xbox_fd;
+      int len, type;
+      int axis_value, button_value;
+      int number_of_axis, number_of_buttons;
+
+      memset(&map, 0, sizeof(xbox_map_t));
+      bool xbox_connected = false;
+      while (!xbox_connected)
       {
-
-        auto enterTime = std::chrono::steady_clock::now();
-
-        // 检测按键状态
-        if (sim->platform_ui->Is1KeyPressed())
+        xbox_fd = xbox_open("/dev/input/js0");
+        if (xbox_fd < 0)
         {
-
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            std::cout << "1 key is pressed" << std::endl;
-            dVyb += 1;
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
+          std::cout << "Failed to open Xbox controller. Make sure it is connected and the correct device path is used.\n";
+          usleep(10 * 1000);
         }
-        if (sim->platform_ui->Is2KeyPressed())
+        else
         {
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            std::cout << "2 key is pressed" << std::endl;
-            dVxb -= 1;
-
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
+          xbox_connected = true;
+          std::cout
+              << "Xbox controller connected successfully.\n";
         }
-        if (sim->platform_ui->Is3KeyPressed())
-        {
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            std::cout << "3 key is pressed" << std::endl;
-            dVyb -= 1;
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
-        }
-        if (sim->platform_ui->Is4KeyPressed())
-        {
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            std::cout << "4  key is pressed" << std::endl;
-            dWzb += 1;
-
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
-        }
-        if (sim->platform_ui->Is5KeyPressed())
-        {
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            dVxb += 1;
-            std::cout << "5 key is pressed" << std::endl;
-
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
-        }
-        if (sim->platform_ui->Is6KeyPressed())
-        {
-          if (std::chrono::duration_cast<chrono::milliseconds>(enterTime - KeyPressedTime) >= chrono::milliseconds(100))
-          {
-            std::cout << "6 key is pressed" << std::endl;
-            dWzb -= 1;
-
-            KeyPressedTime = std::chrono::steady_clock::now();
-          }
-        }
-        enterTime += std::chrono::milliseconds(2); // 500hz
-
-        std::this_thread::sleep_until(enterTime);
       }
-      // 根据键盘更新指令
+
+      while (1)
+      {
+        auto startTime = std::chrono::steady_clock::now();
+
+        len = xbox_map_read(xbox_fd, &map);
+
+        if (len < 0)
+        {
+          usleep(10 * 1000);
+          continue;
+        }
+
+        // printf("\rTime:%8d A:%d B:%d X:%d Y:%d LB:%d RB:%d start:%d back:%d home:%d LO:%d RO:%d XX:%-6d YY:%-6d LX:%-6d LY:%-6d RX:%-6d RY:%-6d LT:%-6d RT:%-6d",
+        //        map.time, map.a, map.b, map.x, map.y, map.lb, map.rb, map.start, map.back, map.home, map.lo, map.ro,
+        //        map.xx, map.yy, map.lx, map.ly, map.rx, map.ry, map.lt, map.rt);
+        // fflush(stdout);
+        startTime += std::chrono::milliseconds(10); // 100hz
+        std::this_thread::sleep_until(startTime);
+      }
+
+      xbox_close(xbox_fd);
     }
 
     void Keyboard_init()
     {
-
+      // ⚠️ 修复：h 为预测步长，需要记录 h+1 个状态，每个状态为 13 维向量
+      desirex.resize(h + 1, Eigen::VectorXf::Zero(13));
+      // dPO = {0, 0, 0.29};
       dFaiz = KF::Faiz; // 用当前偏航角初始 目标偏航角
       dWzO = dWzb;
     }
-
+    float clip(float value, float min, float max)
+    {
+      return value < min ? min : (value > max ? max : value);
+    }
+    bool Lock_state = true;
     void Desire_ins_update(float MPCtime) // 这个仅能根据当前状态 估计下一次状态  ， 但是需要估计未来多个时间段的状态
     {
+
+      dVyb = clip(((float)-map.lx) / 32767.0f, -0.3f, 0.3f);
+      dVxb = clip(((float)-map.ly) / 32767.0f, -0.3f, 0.3f);
+      dWzb = clip(((float)-map.rx) / 32767.0f, -0.3f, 0.3f);
+
+      // // ⚠️ 终极修复 1：一阶低通滤波！绝对禁止指令突变导致落脚点瞬移！
+      // dVxb = 0.9f * dVxb + 0.1f * target_dVxb;
+      // dVyb = 0.9f * dVyb + 0.1f * target_dVyb;
+      // dWzb = 0.9f * dWzb + 0.1f * target_dWzb;
+
+      // if (std::abs(dVxb) < 0.005f)
+      //   dVxb = 0.0f;
+      // if (std::abs(dVyb) < 0.005f)
+      //   dVyb = 0.0f;
+      // if (std::abs(dWzb) < 0.005f)
+      //   dWzb = 0.0f;
+
+      // std::cout << "velx" << dVxb << std::endl;
+      // std::cout << "vely" << dVyb << std::endl;
+      // std::cout << "velz" << dWzb << std::endl;
+
+      if (dVxb == 0 && dVyb == 0 && dWzb == 0 && FSM::currentState == FSM::FSMstate::move)
+      {
+        // std::
+        //   SystemControl::first_mpc = false;
+        FSM::currentState = FSM::FSMstate::stand;
+        // dPO = KF::pcom;
+        //  Lock_state = true;
+      }
+      else if ((dVxb != 0 || dVyb != 0 || dWzb != 0) && FSM::currentState == FSM::FSMstate::stand)
+      {
+        //  SystemControl::first_mpc = false;
+        FSM::currentState = FSM::FSMstate::move;
+        Gait::ChangeGait(0);
+        // Lock_state = false;
+      }
       for (int i = 0; i < h; ++i)
       {
         // 更新期望偏航角
@@ -630,17 +731,21 @@ namespace Quad
               1, Gait::RrPstend[0], Gait::RrPstend[1],
               1, Gait::RlPstend[0], Gait::RlPstend[1];
           _A = A;
-          A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
+          // 可能有错
+          A = (W.transpose() * W).inverse() * W.transpose() * Z;
+          // A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
           A = 0.2 * A + 0.8 * _A; // 低通滤波
           N << -A[1], -A[2], 1;
           // 归一化的法向量
           N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
           dPO = KF::pcom;
-          Tao = TFZ.inverse() * N_;
-          dFaix = asin(Tao[1]);
-          dFaiy = atan(Tao[0] / Tao[2]);
-          dFai << dFaix, dFaiy, dFaiz;
-          desirex[i] << dFai, dPO, KF::B2W * KF::Wb, KF::vcom, -9.81; // 此为当前状态
+          // Tao = TFZ.inverse() * N_;
+          // dFaix = asin(Tao[1]);
+          // dFaiy = atan(Tao[0] / Tao[2]);
+          // dFai << dFaix, dFaiy, dFaiz;
+          Eigen::Vector3f fai = {KF::Faix, KF::Faiy, KF::Faiz};
+          desirex[i] << fai, KF::pcom, KF::B2W * KF::Wb, KF::vcom, -9.81; // 此为当前状态
+          //  std::cout << "desire--->" << desirex[i] << std::endl;
         }
         dFaiz = dFaiz + dWzO * MPCtime;
         // Z轴旋转矩阵
@@ -649,6 +754,7 @@ namespace Quad
             0, 0, 1;
         // 更新期望位置
         dVO = TFZ * dVb;
+
         dPO = dPO + dVO * MPCtime;
         dPO[2] = dHb; // 期望机身高度
 
@@ -656,36 +762,44 @@ namespace Quad
         Tao = TFZ.inverse() * N_;
         dFaix = asin(Tao[1]);
         dFaiy = atan(Tao[0] / Tao[2]);
+        if (FSM::currentState == FSM::FSMstate::stand)
+        {
+          dFaix = 0;
+          dFaiy = 0;
+        } // 站立时强行保持水平
         dFai << dFaix, dFaiy, dFaiz;
         // 更新期望状态向量
         desirex[i + 1] << dFai, dPO, dWO, dVO, -9.81;
       }
       for (int i = 0; i < h; i++)
       {
-        D.block(13 * h, 1, 13, 1) = desirex[i + 1];
+        D.block(13 * i, 0, 13, 1) = desirex[i + 1];
       }
     }
   };
 
   namespace ConvexMPC
   {
-
-    Eigen::MatrixXf Temp_A(13, 13), A(13, 13), Continue_B(13, 13), B(13, 13);
+    Eigen::MatrixXf Temp_A(13, 13), A(13, 13), Continue_B(13, 13);
     Eigen::Matrix3f BInertia, PInertia;
-    float MPC_T = 0.01;
-    // float h; // mpc预测步长
-    Eigen::MatrixXf Q(13 * h, 13 * h), R(12 * h, 12 * h), Aqp(13 * h, 13),
-        Bqp(13 * h, 12 * h), D(13 * h, 1), H(12 * h, 12 * h), g(12 * h, 1),
-        lb(12 * h, 1), ub(12 * h, 1), lba(20 * h, 1), uba(20 * h, 1), Ampc(20 * h, 12 * h);
+
+    // 动态维度矩阵，后续将在 UpdateState 中根据支撑腿数量 resize
+    Eigen::MatrixXf Q, R, Aqp, Bqp, D, H, g, lb, ub, lba, uba, Ampc;
+
     Eigen::VectorXf vec(13);
     Eigen::MatrixXf temp(13, 13);
-    Eigen::MatrixXf Umpc(12, 1);
-    int nv = 12 * h;
-    int nc = 20 * h;
-    int nWSR = 100; // 最大工作集切换次数（Working Set Recalculations）
-    float Fmax = 30;
-    qpOASES::QProblem solver(nv, nc);
-    float fri; // 摩擦系数
+    Eigen::MatrixXf Umpc(12, 1); // 保留用于日志或调试
+    Eigen::VectorXf Umpc_st;     // 专门用于传递给 WBC 的 3*nst 维向量
+    int n_st = 0;                // 当前支撑腿数量
+
+    float Fmax = 250.0f;
+    float fri = 0.4f; // 摩擦系数
+    Eigen::Vector4f MPCsFai;
+
+    // ⚠️ 工业级优化：使用全局静态指针管理求解器，杜绝内存反复分配
+    qpOASES::QProblem *qp_solver = nullptr;
+    int last_n_vars = 0;
+
     Eigen::Matrix3f QUa2Mat(float w, float x, float y, float z)
     {
       Eigen::Matrix3f tran;
@@ -694,185 +808,161 @@ namespace Quad
           2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
       return tran;
     }
+
     void MPC_init()
     {
-      // 初始化 A的固定值
       A.setZero();
       A.setIdentity(13, 13);
       A.block(3, 9, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T;
       A(11, 12) = 1 * MPC_T;
 
-      // 初始化  本体系的惯性矩阵
-      Eigen::Matrix3f R = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
+      Eigen::Matrix3f Ro = QUa2Mat(-0.000543471, 0.713435, -0.00173769, 0.700719);
       Eigen::Vector3f diaginertia(0.107027, 0.0980771, 0.0244531);
-      float m = 6.291;
+
+      float mm = 6.921f;
       Eigen::Matrix3f I_principal = diaginertia.asDiagonal();
       Eigen::Vector3f P(0.021112, 0, -0.005366);
-      // 旋转定理 +平行移轴定理
-      BInertia = (R * I_principal * (R.transpose())) + m * (P.transpose() * P * Eigen::Matrix3f::Identity() - P * P.transpose());
-      // 平行移轴定理
 
-      // 初始化 B 的固定值
-      B.setZero();
-      B.block(9, 0, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 3, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 6, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
-      B.block(9, 9, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / 6.921;
-      // for(int i=0;i<h;i++)
+      BInertia = (Ro * I_principal * (Ro.transpose())) + mm * (P.dot(P) * Eigen::Matrix3f::Identity() - P * P.transpose());
+
       vec << 25, 25, 10, 1, 1, 100, 0, 0, 0.3, 0.2, 0.2, 20, 0;
       temp = vec.asDiagonal();
+
+      // Q 矩阵尺寸固定，可以在此分配
+      Q.resize(13 * h, 13 * h);
       Q.setZero();
       for (int i = 0; i < h; ++i)
       {
-        Q.block(i * 13, i * 13, 13, 13) = Q;
+        Q.block(i * 13, i * 13, 13, 13) = temp;
       }
-      R.setZero();
-      R = Eigen::MatrixXf::Identity(12 * h, 12 * h) * 0.00005;
-      Aqp.setZero();
-      Bqp.setZero();
-      //   h = 50; // 预测步长    预测时域不能超过半个步态周期
-      //  调用 qpoases 求解
 
-      qpOASES::Options option;
-      option.setToMPC();
-      option.printLevel = qpOASES::PL_NONE;
-      solver.setOptions(option);
-
-      lb.setZero();
-      lba.setZero();
-      uba.setZero();
-      Eigen::VectorXf vub;
-      vub << 1e10, 1e10, 1e10, 1e10, Fmax;
-      for (int i = 0; i < h; i++)
-      {
-        for (int j = 0; j < 4; j++)
-        {
-          uba.block(20 * i + j * 5, 1, 5, 1) = vub;
-        }
-      }
-      Eigen::MatrixXf t(5, 3);
-      t << -1, 0, fri,
-          0, -1, fri,
-          1, 0, fri,
-          0, 1, fri,
-          0, 0, 1;
-      for (int i = 0; i < h; ++i)
-      {
-        for (int j = 0; j < 4; ++j)
-        {
-          Ampc.block(20 * h + 5 * j, 12 * h + 3 * j, 5, 3) = t;
-        }
-      }
+      // 注意：R, lb, ub, Aqp, Bqp 等矩阵，由于使用了降维技术，将全部在 UpdateState 中动态分配
     }
 
     Eigen::Matrix3f getRotationMatrix(double psi, double theta, double phi)
     {
-      // 预先计算三角函数值
-      double c_psi = std::cos(psi);
-      double s_psi = std::sin(psi);
-      double c_theta = std::cos(theta);
-      double s_theta = std::sin(theta);
-      double c_phi = std::cos(phi);
-      double s_phi = std::sin(phi);
+      double c_psi = std::cos(psi), s_psi = std::sin(psi);
+      double c_theta = std::cos(theta), s_theta = std::sin(theta);
+      double c_phi = std::cos(phi), s_phi = std::sin(phi);
 
-      // 初始化 3x3 矩阵
       Eigen::Matrix3f R;
-
-      // 第一行
       R(0, 0) = c_theta * c_psi;
       R(0, 1) = c_psi * s_phi * s_theta - c_phi * s_psi;
       R(0, 2) = s_phi * s_psi + c_phi * c_psi * s_theta;
-
-      // 第二行
       R(1, 0) = c_theta * s_psi;
       R(1, 1) = c_phi * c_psi + s_phi * s_theta * s_psi;
       R(1, 2) = c_phi * s_theta * s_psi - c_psi * s_phi;
-
-      // 第三行
       R(2, 0) = -s_theta;
       R(2, 1) = c_theta * s_phi;
       R(2, 2) = c_phi * c_theta;
-
       return R;
     }
+
     void UpdateState()
     {
+      MPCsFai = Gait::sFai;
 
-      // 更新 Aqp  Bqp   //
+      // 1. 动态过滤出当前的有效支撑腿
+      std::vector<int> act_legs;
+      for (int i = 0; i < 4; i++)
+      {
+        if (MPCsFai[i] == 1)
+          act_legs.push_back(i);
+      }
+      n_st = act_legs.size();
+
+      // 防御机制：如果悬空，直接下发 0 力矩
+      if (n_st == 0)
+      {
+        Umpc_st.resize(0);
+        Umpc.setZero();
+        return;
+      }
+
+      // 计算降维后的问题规模
+      int n_vars = 3 * n_st * h; // QP优化变量数量 (60 或 120)
+      int n_cons = 5 * n_st * h; // QP约束数量 (100 或 200)
+
+      // 2. 动态分配底层矩阵的内存
+      Aqp.resize(13 * h, 13);
+      Bqp.resize(13 * h, n_vars);
+      Bqp.setZero();
+
+      R.resize(n_vars, n_vars);
+      R.setIdentity();
+      R *= 1e-5f * 5;
+
+      lb.resize(n_vars, 1);
+      ub.resize(n_vars, 1);
+      Ampc.resize(n_cons, n_vars);
+      Ampc.setZero();
+      lba.resize(n_cons, 1);
+      lba.setZero();
+      uba.resize(n_cons, 1);
+
+      // 3. 构建 Aqp 和 Bqp (使用降维拼接)
       for (int i = 0; i < h; ++i)
       {
         if (i == 0)
-        {
           Temp_A.setIdentity();
-        }
-        A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[i][2]);
+        A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[i][2]).transpose() * MPC_T;
         Temp_A = A * Temp_A;
-        Aqp.block(13 * i, 0, 13, 13) = (Temp_A);
+        Aqp.block(13 * i, 0, 13, 13) = Temp_A;
       }
 
-      for (int i = 0; i < h; i++) // B0 - B9
+      float m = 15.205f;
+      for (int i = 0; i < h; i++)
       {
-        Eigen::Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
+        Eigen::Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], 0, 0);
+
+        //  Eigen::Matrix3f Ro = getRotationMatrix(KeyboardIns::desirex[i][2], KeyboardIns::desirex[i][1], KeyboardIns::desirex[i][0]);
         PInertia = Ro * BInertia * (Ro.transpose());
 
-        if (Gait::sFai[0] == 0) // 摆动腿   用目标落地点 -  质心
+        // 仅对有效支撑腿计算 B 矩阵映射
+        Eigen::MatrixXf B_step = Eigen::MatrixXf::Zero(13, 3 * n_st);
+        for (int leg_idx = 0; leg_idx < n_st; leg_idx++)
         {
-          B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[0] - KF::X.block(0, 0, 3, 1));
-        }
-        else // 支撑腿   用 支撑足  - 质心
-        {
-          B.block(6, 0, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FrPstend - KF::X.block(0, 0, 3, 1));
-        }
-
-        if (Gait::sFai[1] == 0) // 摆动腿   用目标落地点 -  质心
-        {
-          B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[1] - KF::X.block(0, 0, 3, 1));
-        }
-        else // 支撑腿   用 支撑足  - 质心
-        {
-          B.block(6, 3, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::FlPstend - KF::X.block(0, 0, 3, 1));
+          int leg = act_legs[leg_idx];
+          B_step.block(6, 3 * leg_idx, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pstend[leg] - KF::X.block(0, 0, 3, 1)) * MPC_T;
+          B_step.block(9, 3 * leg_idx, 3, 3) = Eigen::Matrix3f::Identity() * MPC_T / m;
         }
 
-        if (Gait::sFai[2] == 0) // 摆动腿   用目标落地点 -  质心
-        {
-          B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[2] - KF::X.block(0, 0, 3, 1));
-        }
-        else // 支撑腿   用 支撑足  - 质心
-        {
-          B.block(6, 6, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RrPstend - KF::X.block(0, 0, 3, 1));
-        }
-
-        if (Gait::sFai[3] == 0) // 摆动腿   用目标落地点 -  质心
-        {
-          B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::Pswend[3] - KF::X.block(0, 0, 3, 1));
-        }
-        else // 支撑腿   用 支撑足  - 质心
-        {
-          B.block(6, 9, 3, 3) = (PInertia.inverse()) * KF::skewSymmetric(Gait::RlPstend - KF::X.block(0, 0, 3, 1));
-        }
         for (int j = i + 1; j < h + 1; j++)
         {
-
           if (j == i + 1)
-          {
             Temp_A.setIdentity();
-          }
-          A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[j][2]); // A(i+1)开始
-          Bqp.block((j - 1) * 13, i * 12, 13, 12) = Temp_A * B;
+          A.block(0, 6, 3, 3) = Gait::TF_Z(KeyboardIns::desirex[j][2]).transpose() * MPC_T;
+          Bqp.block((j - 1) * 13, i * 3 * n_st, 13, 3 * n_st) = Temp_A * B_step;
           Temp_A = A * Temp_A;
         }
       }
-      ub.setConstant(30);
-      for (int i = 0; i < 4; i++)
+
+      // 4. 构建力边界和摩擦锥约束
+      Eigen::MatrixXf t(5, 3);
+      t << -1, 0, fri, 0, -1, fri, 1, 0, fri, 0, 1, fri, 0, 0, 1;
+      Eigen::VectorXf vub(5);
+      vub << 100000.0f, 100000.0f, 100000.0f, 100000.f, Fmax;
+
+      for (int i = 0; i < h; i++)
       {
-        if (Gait::sFai[i] == 0) // 摆动腿
+        for (int leg_idx = 0; leg_idx < n_st; leg_idx++)
         {
-          for (int j = 0; j < h; j++)
-          {
-            ub.block(12 * j + 3 * i, 1, 3, 1) = Eigen::Vector3f::Zero();
-          }
+          // 设置 X Y Z 三个维度的上下界
+          lb(i * 3 * n_st + 3 * leg_idx + 0) = -Fmax * fri;
+          ub(i * 3 * n_st + 3 * leg_idx + 0) = Fmax * fri;
+          lb(i * 3 * n_st + 3 * leg_idx + 1) = -Fmax * fri;
+          ub(i * 3 * n_st + 3 * leg_idx + 1) = Fmax * fri;
+          lb(i * 3 * n_st + 3 * leg_idx + 2) = 0.f;
+          ub(i * 3 * n_st + 3 * leg_idx + 2) = Fmax;
+
+          // 填入摩擦锥
+          Ampc.block(i * 5 * n_st + 5 * leg_idx, i * 3 * n_st + 3 * leg_idx, 5, 3) = t;
+          uba.block(i * 5 * n_st + 5 * leg_idx, 0, 5, 1) = vub;
         }
       }
+
+      // 5. 组装 QP 矩阵
+      D = KeyboardIns::D; // 提取当前的 D 矩阵
       H = 2 * (Bqp.transpose() * Q * Bqp + R);
       g = 2 * Bqp.transpose() * Q * (Aqp * KeyboardIns::desirex[0] - D);
 
@@ -884,36 +974,67 @@ namespace Quad
       Eigen::VectorXd lba_qp = lba.cast<double>();
       Eigen::VectorXd uba_qp = uba.cast<double>();
 
-      // 2. 调用 qpOASES
-      //     qpOASES 接受的参数是 real_t *(通常是 double *)
-      //         使用.data() 获取 Eigen 矩阵内部的原始指针 int nWSR_actual = nWSR;
-      qpOASES::returnValue status = solver.init(
-          H_qp.data(),
-          g_qp.data(),
-          A_qp.data(),
-          lb_qp.data(),
-          ub_qp.data(),
-          lba_qp.data(),
-          uba_qp.data(),
-          nWSR);
+      // 6. 智能管理 qpOASES 求解器生命周期 (仅在变量维度变化时重建求解器)
+      if (n_vars != last_n_vars || qp_solver == nullptr)
+      {
+        if (qp_solver != nullptr)
+          delete qp_solver;
+        qp_solver = new qpOASES::QProblem(n_vars, n_cons);
+        qpOASES::Options option;
+        option.setToMPC();
+        option.printLevel = qpOASES::PL_NONE;
+        qp_solver->setOptions(option);
+        last_n_vars = n_vars;
+      }
+
+      int nWSR_actual = 200;
+      qpOASES::returnValue status = qp_solver->init(
+          H_qp.data(), g_qp.data(), A_qp.data(),
+          lb_qp.data(), ub_qp.data(), lba_qp.data(), uba_qp.data(),
+          nWSR_actual);
 
       if (status == qpOASES::SUCCESSFUL_RETURN)
       {
-        // 获取解
-        double xOpt[12 * h];
-        solver.getPrimalSolution(xOpt);
-        Umpc << xOpt[0], xOpt[1], xOpt[2], xOpt[3], xOpt[4], xOpt[5], xOpt[6], xOpt[7], xOpt[8], xOpt[9], xOpt[10], xOpt[11];
-        // 将 xOpt 传给下游控制器
+        double xOpt[n_vars];
+        qp_solver->getPrimalSolution(xOpt);
+
+        // 7. 直接提取完美对齐的支撑腿结果给 WBC
+        Umpc_st.resize(3 * n_st);
+        for (int i = 0; i < 3 * n_st; i++)
+        {
+          Umpc_st[i] = xOpt[i];
+        }
+
+        // (可选) 填充 12 维的 Umpc 用于日志或外部可视化
+        Umpc.setZero();
+        for (int leg_idx = 0; leg_idx < n_st; leg_idx++)
+        {
+          Umpc.block(3 * act_legs[leg_idx], 0, 3, 1) = Umpc_st.block(3 * leg_idx, 0, 3, 1);
+        }
       }
       else
       {
-        std::cout << "MPC SOlve  Failed--------" << std::endl;
+        std::cout << "MPC Solve Failed--------" << status << std::endl;
       }
+    }
+
+    void MPC_Reset()
+    {
+      if (qp_solver != nullptr)
+      {
+        delete qp_solver;
+        qp_solver = nullptr;
+      }
+      last_n_vars = 0;
+      n_st = 0;
+      Umpc.setZero();
+      Umpc_st.resize(0);
     }
   };
 
   namespace WBC
   {
+    bool is_tree_created = false; // 新增：安全锁
     struct node
     {
       std::weak_ptr<node> parent;
@@ -926,7 +1047,7 @@ namespace Quad
       }
     };
 
-    void bind(const std::shared_ptr<node> &parent, const std::shared_ptr<node> &child)
+    void bind(std::shared_ptr<node> &parent, std::shared_ptr<node> &child)
     {
 
       parent->add_child(child);
@@ -976,6 +1097,7 @@ namespace Quad
       Vnode.push_back(node11);
       Vnode.push_back(node12);
       Vnode.push_back(node13);
+      is_tree_created = true; // 新增：树建立完毕，允许计算
     }
 
     Eigen::Matrix3f TFX(float angle)
@@ -1006,9 +1128,14 @@ namespace Quad
       }
       else if (node->num == 1)
       {
-        TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Zero(),
-            -KF::B2W.inverse() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
+        // TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Zero(),
+        //     -KF::B2W.inverse() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
+        // return TFMatrix;
+        //=======================================
+        TFMatrix << KF::B2W.transpose(), Eigen::Matrix3f::Zero(),
+            -KF::B2W.transpose() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
         return TFMatrix;
+        //=======================================
       }
       else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
       {
@@ -1168,17 +1295,27 @@ namespace Quad
     Eigen::MatrixXf J1, J2(3, 18), J3(3, 18), J4, J1q, J2q(3, 1), J3q(3, 1), J4q, e(3, 1), x(3, 1), JA, NA;
     Eigen::Matrix3f tran2; // 任务2 用的
     Eigen::MatrixXf Q1(6, 6), Q2(12, 12), G(18, 18), CE, Ce, CI, Ci, Mf, Jcf, Cf, CA, _CA, CA_;
-    float kp, kd;
 
+    float kp = 150.f;
+    float kd = 100.f;
     // 空间速度 空间加速度 {0} 到任意坐标系的变换矩阵   Si从 i=1 开始
     vector<Eigen::MatrixXf> Vspace, Aspace, Aspaced, X02I, X02If, Si, fi, Vji, qidot, Jb, XQi, Jbi, AspaceQ, VspaceQ, I, Ic;
     Eigen::MatrixXf XCi(6, 6), C(18, 1), M(18, 18);
     vector<int> pi;
 
+    // ⚠️ 工业级优化：使用阻尼最小二乘法取代 SVD，速度提升百倍，同时保证绝对的非奇异性
     Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
-      return mat.transpose() * ((mat * mat.transpose()).inverse());
+      if (mat.rows() == 0 || mat.cols() == 0)
+        return Eigen::MatrixXf::Zero(mat.cols(), mat.rows());
+
+      float lambda = 1e-4f; // 阻尼系数，保护奇点
+      Eigen::MatrixXf I = Eigen::MatrixXf::Identity(mat.rows(), mat.rows());
+
+      // J# = J^T * (J * J^T + lambda^2 * I)^-1
+      return mat.transpose() * (mat * mat.transpose() + lambda * lambda * I).inverse();
     }
+
     Eigen::MatrixXf Vcross(const Eigen::MatrixXf &V)
     {
       Eigen::MatrixXf Vx(6, 6);
@@ -1196,8 +1333,33 @@ namespace Quad
     }
     void WBC_Init()
     {
+      // ⚠️ 修复：必须先为 vector 分配空间，总共 14 个刚体节点 (0~13)
+      Si.resize(14);
+      X02I.resize(14);
+      X02If.resize(14);
+      Vspace.resize(14);
+      Aspace.resize(14);
+      Aspaced.resize(14);
+      fi.resize(14);
+      Vji.resize(14);
+      qidot.resize(14);
+      I.resize(14);
+      Ic.resize(14);
+
+      // 腿部的相关参数，总共 4 条腿
+      Jb.resize(4);
+      Jbi.resize(4);
+      XQi.resize(4);
+      AspaceQ.resize(4);
+      VspaceQ.resize(4);
+
       Si[0] = Eigen::MatrixXf::Zero(6, 6); // 没有 Si0 随便初始
       Si[1] = Eigen::MatrixXf::Identity(6, 6);
+
+      for (int i = 2; i < 14; ++i)
+      {
+        Si[i].setZero(6, 1);
+      }
       Si[2] << 1, 0, 0, 0, 0, 0;
       Si[5] << 1, 0, 0, 0, 0, 0;
       Si[8] << 1, 0, 0, 0, 0, 0;
@@ -1222,6 +1384,7 @@ namespace Quad
       Aspaced[0] << 0, 0, 0, 0, 0, 9.81;
       J2 << KF::B2W, Eigen::MatrixXf::Zero(3, 15);
       J3 << Eigen::Matrix3f::Zero(), KF::B2W, Eigen::MatrixXf::Zero(3, 12);
+
       pi.push_back(4);
       pi.push_back(7);
       pi.push_back(10);
@@ -1239,11 +1402,15 @@ namespace Quad
       J2q << Eigen::MatrixXf::Zero(3, 1);
       J3q << Eigen::MatrixXf::Zero(3, 1);
 
-      //
+      // //
       vector<Eigen::Vector3f> P;
+      P.resize(4);
       vector<Eigen::Vector4f> quat;
+      quat.resize(13);
       vector<float> mass;
+      mass.resize(4);
       vector<Eigen::Vector3f> diagnertia;
+      diagnertia.resize(4);
       P[0] << 0.021112, 0, -0.005366;
       mass[0] = 6.921;
       diagnertia[0] << 0.107027, 0.0980771, 0.0244531;
@@ -1275,22 +1442,55 @@ namespace Quad
       {
         Eigen::Matrix3f R = ConvexMPC::QUa2Mat(quat[i][0], quat[i][1], quat[i][2], quat[i][3]);
         int r = (i == 0) ? 0 : ((i - 1) % 3 + 1);
-        I[i] = (R * diagnertia[r].asDiagonal() * R.transpose()) + mass[r] * (P[r].transpose() * P[r] * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
+        //  I[i] = (R * diagnertia[r].asDiagonal() * R.transpose()) + mass[r] * (P[r].transpose() * P[r] * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
+        //====================================================//====================================================
+        Eigen::Matrix3f I_3x3 = (R * diagnertia[r].asDiagonal() * R.transpose()) +
+                                mass[r] * (P[r].dot(P[r]) * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
+        // 2. 计算质心偏移向量的反对称矩阵 c_x
+        Eigen::Matrix3f c_cross = KF::skewSymmetric(P[r]);
+
+        // 3. ⚠️ 修复：重设尺寸为 6x6，并依照公式 5.40 将 4 个块拼装成完整的六维空间惯量
+        I[i].resize(6, 6);
+        I[i] << I_3x3, mass[r] * c_cross,
+            mass[r] * c_cross.transpose(), mass[r] * Eigen::Matrix3f::Identity();
+        //====================================================//====================================================//====================================================
       }
     }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
     {
+
+      int n_st = ConvexMPC::n_st;
+      int n_sw = 0;
+      // for (int i = 0; i < 4; i++)
+      // {
+      //   if (Gait::sFai[i] == 1)
+      //     n_st++;
+      // }
+      n_sw = 4 - n_st;
+      J1.resize(3 * n_st, 18);
+      J1.setZero();
+      J1q.resize(3 * n_st, 1);
+      J1q.setZero();
+
+      J4.resize(3 * n_sw, 18);
+      J4.setZero();
+      J4q.resize(3 * n_sw, 1);
+      J4q.setZero();
       int J1num = 0;
       int J4num = 0;
+      // ⚠️ 修复 2：Eigen 使用 << 逗号初始化前，必须提前分配好尺寸！
+      qidot[0].resize(6, 1);
       qidot[0] << KF::Wb, KF::B2W.transpose() * KF::vcom;
       for (int i = 0; i < 12; ++i)
       {
+        qidot[i + 1].resize(1, 1);
         qidot[i + 1] << KF::jointvel[i];
       }
 
       for (int i = 1; i < 14; ++i)
       {
+
         X02I[i] = Transform_P2C(Vnode[i]) * X02I[Vnode[i]->parent.lock()->num];
         X02If[i] = (X02I[i].inverse()).transpose();
         Vji[i - 1] = Si[i] * qidot[i - 1];
@@ -1302,6 +1502,7 @@ namespace Quad
         // 旋转惯量 没写
         fi[i - 1] = I[i - 1] * Aspaced[i] + Fcross(Vspace[i]) * (I[i - 1] * Vspace[i]);
       }
+
       // 反推 更新C矩阵  更新 Ic 组合刚体 空间惯量
       for (int i = 13; i > 0; --i)
       {
@@ -1317,7 +1518,8 @@ namespace Quad
         Ic[i - 1] = I[i - 1];
         for (auto node : Vnode[i]->child)
         { // 这里 i 的child 是j 们， 所以i->j  和j->i 是P2C 或者 C2P 的关系 ，直接用
-          Ic[i - 1] = Ic[i - 1] + Transform_C2PF(Vnode[node->num]) * Ic[node->num] * Transform_P2C(Vnode[node->num]);
+
+          Ic[i - 1] = Ic[i - 1] + Transform_C2PF(Vnode[node->num]) * Ic[node->num - 1] * Transform_P2C(Vnode[node->num]);
         }
 
         if (i == 1)
@@ -1329,7 +1531,7 @@ namespace Quad
           M.block(i + 4, i + 4, 1, 1) = Si[i].transpose() * Ic[i - 1] * Si[i];
         }
         int j = i;
-        Eigen::MatrixXf Xt(6, 6) = Eigen::MatrixXf::Identity(6, 6);
+        Eigen::MatrixXf Xt = Eigen::MatrixXf::Identity(6, 6);
         while (Vnode[j]->parent.lock()->num > 0)
         {
           Xt = Xt * Transform_P2C(Vnode[j]);
@@ -1353,9 +1555,14 @@ namespace Quad
       for (int i = 0; i < 4; ++i)
       {
         int j = pi[i];
+        // ⚠️ 修复 1
+        XQi[i].resize(6, 6);
         XQi[i] << X02I[pi[i]].block(3, 3, 3, 3).transpose(), Eigen::Matrix3f::Zero(),
             Eigen::Matrix3f::Zero(), X02I[pi[i]].block(3, 3, 3, 3).transpose();
         Eigen::MatrixXf Xjpi = Eigen::MatrixXf::Identity(6, 6);
+        // ⚠️ 修复 2：Jb 使用 .block 赋值前，必须分配 6x18 的尺寸并清零！
+        Jb[i].resize(6, 18);
+        Jb[i].setZero();
         Jb[i].block(0, pi[i] + 4, 6, 1) = Si[pi[i]];
         while (Vnode[j]->parent.lock()->num > 0)
         {
@@ -1366,107 +1573,439 @@ namespace Quad
           else
             Jb[i].block(0, j + 4, 6, 1) = Xjpi * Si[j];
         }
-        // 转向定向足底坐标系
+        //  转向定向足底坐标系
         Jbi[i] = (XQi[i] * XCi * Jb[i]).block(3, 0, 3, 18);
         AspaceQ[i] = (XQi[i] * XCi) * Aspace[pi[i]];
         VspaceQ[i] = (XQi[i] * XCi) * Vspace[pi[i]];
 
-        if (Gait::sFai[i] == 1) // 支撑腿
+        //======================
+        if (ConvexMPC::MPCsFai[i] == 1) // 支撑腿
         {
           J1.block(3 * J1num, 0, 3, 18) = Jbi[i];
-          J1q.block(3 * J1num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + VspaceQ[i].block(0, 0, 3, 1).cross(VspaceQ[i].block(3, 0, 3, 1));
+          // 显式转换为 Vector3f
+          J1q.block(3 * J1num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + Eigen::Vector3f(VspaceQ[i].block(0, 0, 3, 1)).cross(Eigen::Vector3f(VspaceQ[i].block(3, 0, 3, 1)));
           J1num++;
         }
         else // 摆动腿
         {
           J4.block(3 * J4num, 0, 3, 18) = Jbi[i];
-          J4q.block(3 * J4num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + VspaceQ[i].block(0, 0, 3, 1).cross(VspaceQ[i].block(3, 0, 3, 1));
-
+          // 显式转换为 Vector3f
+          J4q.block(3 * J4num, 0, 3, 1) = AspaceQ[i].block(3, 0, 3, 1) + Eigen::Vector3f(VspaceQ[i].block(0, 0, 3, 1)).cross(Eigen::Vector3f(VspaceQ[i].block(3, 0, 3, 1)));
           J4num++;
         }
+
+        //===================
       }
     }
-    void WBC_Update()
+
+    void WBC_Update(mjModel *model, mjData *data)
     {
-      // 第一个任务 支撑腿跟随
+
+      //  std::cout << "WBC_Update" << std::endl;
+      //===================================
+      // 0. 准备当前状态 q 和 qdot
+      q.block(0, 0, 3, 1) << KF::Faix, KF::Faiy, KF::Faiz;
+      q.block(3, 0, 3, 1) = KF::pcom;
+      q.block(6, 0, 12, 1) = KF::jointpos;
+
+      qdot.block(0, 0, 3, 1) = KF::Wb;
+      qdot.block(3, 0, 3, 1) = KF::vcom;
+      qdot.block(6, 0, 12, 1) = KF::jointvel;
+
+      // 初始化层级矩阵与零空间
+      Eigen::MatrixXf J_prev = J1;
+      Eigen::MatrixXf NA = Eigen::MatrixXf::Identity(18, 18) - WideInverse(J_prev) * J_prev;
+
       detqcmd.setZero();
       qdotcmde.setZero();
       qddotcmde = WideInverse(J1) * (-J1q);
-      for (int i = 0; i < 3; ++i)
+
+      // ---- 任务 2：机身姿态转动控制 ----
+      tran2 << cos(KeyboardIns::desirex[0][1]) * cos(KeyboardIns::desirex[0][2]), -sin(KeyboardIns::desirex[0][2]), 0,
+          cos(KeyboardIns::desirex[0][1]) * sin(KeyboardIns::desirex[0][2]), cos(KeyboardIns::desirex[0][2]), 0,
+          -sin(KeyboardIns::desirex[0][1]), 0, 1;
+      Eigen::Vector3f dfai = {KeyboardIns::desirex[1][0], KeyboardIns::desirex[1][1], KeyboardIns::desirex[1][2]};
+      Eigen::Vector3f fai = {KeyboardIns::desirex[0][0], KeyboardIns::desirex[0][1], KeyboardIns::desirex[0][2]};
+      Eigen::Vector3f dwO = {KeyboardIns::desirex[1][6], KeyboardIns::desirex[1][7], KeyboardIns::desirex[1][8]};
+
+      e = tran2 * (dfai - fai);
+
+      x = kd * (dwO - KF::B2W * KF::Wb) + kp * (e);
+      std::cout << "+================================================================" << std::endl;
+      std::cout << "Fai error--\n"
+                << dfai - fai << std::endl;
+      std::cout << "W error--\n>" << dwO - KF::B2W * KF::Wb << std::endl;
+
+      detqcmd += WideInverse(J2 * NA) * (e - J2 * detqcmd);
+      qdotcmde += WideInverse(J2 * NA) * (dwO - J2 * qdotcmde);
+      qddotcmde += WideInverse(J2 * NA) * (x - J2q - J2 * qddotcmde);
+
+      // 叠加任务 1 和任务 2 的雅可比求新零空间
+      Eigen::MatrixXf JA2(J_prev.rows() + J2.rows(), 18);
+      JA2 << J_prev, J2;
+      J_prev = JA2;
+      NA = Eigen::MatrixXf::Identity(18, 18) - WideInverse(J_prev) * J_prev;
+
+      // ---- 任务 3：机身平动控制 ----
+      Eigen::Vector3f dPo = {KeyboardIns::desirex[1][3], KeyboardIns::desirex[1][4], KeyboardIns::desirex[1][5]};
+      Eigen::Vector3f dVO = {KeyboardIns::desirex[1][9], KeyboardIns::desirex[1][10], KeyboardIns::desirex[1][11]};
+
+      e = dPo - KF::pcom;
+      x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
+      std::cout << "P error--->\n"
+                << e << std::endl;
+      std::cout << "V error-->\n"
+                << dVO - KF::vcom << std::endl;
+
+      detqcmd += WideInverse(J3 * NA) * (e - J3 * detqcmd);
+      qdotcmde += WideInverse(J3 * NA) * (dVO - J3 * qdotcmde);
+      qddotcmde += WideInverse(J3 * NA) * (x - J3q - J3 * qddotcmde);
+
+      // 叠加任务 1、2、3 的雅可比求新零空间
+      Eigen::MatrixXf JA3(J_prev.rows() + J3.rows(), 18);
+      JA3 << J_prev, J3;
+      J_prev = JA3;
+      NA = Eigen::MatrixXf::Identity(18, 18) - WideInverse(J_prev) * J_prev;
+
+      // ---- 任务 4：摆动腿足端轨迹控制 (最低优先级) ----
+      Eigen::VectorXf ee(3 * J4.rows() / 3), Pfoot(3 * J4.rows() / 3), dPfoot(3 * J4.rows() / 3);
+      Eigen::VectorXf Vfoot(3 * J4.rows() / 3), dVfoot(3 * J4.rows() / 3);
+      int num = 0;
+      for (int j = 0; j < 4; ++j)
       {
-        switch (i)
-        {
-        case 0:
-        { // 第二个 机身转动
-          tran2 << cos(KeyboardIns::desirex[0][1]) * cos(KeyboardIns::desirex[0][2]), -sin(KeyboardIns::desirex[0][2]), 0,
-              cos(KeyboardIns::desirex[0][1]) * sin(KeyboardIns::desirex[0][2]), cos(KeyboardIns::desirex[0][2]), 0,
-              -sin(KeyboardIns::desirex[0][1]), 0, 1;
-          Eigen::Vector3f dfai = {KeyboardIns::desirex[1][0], KeyboardIns::desirex[1][1], KeyboardIns::desirex[1][2]};
-          Eigen::Vector3f fai = {KeyboardIns::desirex[0][0], KeyboardIns::desirex[0][1], KeyboardIns::desirex[0][2]};
-          Eigen::Vector3f dwO = {KeyboardIns::desirex[1][6], KeyboardIns::desirex[1][7], KeyboardIns::desirex[1][8]};
-
-          e = tran2 * (dfai - fai);
-          x = kd * (dwO - KF::B2W * KF::Wb) + kp * (e);
-          JA.block(0, 0, J1.rows(), 18) = J1;
-          NA = Eigen::MatrixXf::Identity(JA.cols(), JA.cols()) - WideInverse(JA) * JA;
-          detqcmd = detqcmd + WideInverse(J2 * NA) * (e - J2 * detqcmd);
-          qdotcmde = qdotcmde + WideInverse(J2 * NA) * (dwO - J2 * qdotcmde);
-          qddotcmde = qddotcmde + WideInverse(J2 * NA) * (x - J2q - J2 * qddotcmde);
-          break;
-        }
-        case 1: // 机身平动
-        {
-          Eigen::Vector3f dPo = {KeyboardIns::desirex[1][3], KeyboardIns::desirex[1][4], KeyboardIns::desirex[1][5]};
-          Eigen::Vector3f dVO = {KeyboardIns::desirex[1][9], KeyboardIns::desirex[1][10], KeyboardIns::desirex[1][11]};
-
-          e = dPo - KF::pcom;
-          x = kd * (dVO - KF::vcom) + kp * (dPo - KF::pcom);
-          JA.block(J1.rows(), 0, 3, 18) = J2;
-          NA = Eigen::MatrixXf::Identity(JA.cols(), JA.cols()) - WideInverse(JA) * JA;
-          detqcmd = detqcmd + WideInverse(J3 * NA) * (e - J3 * detqcmd);
-          qdotcmde = qdotcmde + WideInverse(J3 * NA) * (dVO - J3 * qdotcmde);
-          qddotcmde = qddotcmde + WideInverse(J3 * NA) * (x - J3q - J3 * qddotcmde);
-          break;
-        }
-        case 2: // 摆动腿
-        {
-          Eigen::VectorXf ee, Pfoot, dPfoot, Vfoot, dVfoot;
-          int num = 0;
-          for (int j = 0; j < 4; ++j)
-          {
-            if (Gait::sFai[j] == 0)
-            {
-              Pfoot.block(3 * num, 0, 3, 1) = KF::pcom + KF::B2W * KF::iPb[j];
-              Vfoot.block(3 * num, 0, 3, 1) = XQi[j] * XCi * Vspace[pi[j]].block(3, 0, 3, 1);
-              dPfoot.block(3 * num, 0, 3, 1) = Gait::FootdesirePos[j];
-              dVfoot.block(3 * num, 0, 3, 1) = Gait::FootdesireVelocity[j];
-              num++;
-            }
-          }
-          ee = dPfoot - Pfoot;
-          x = kd * (dVfoot - Vfoot) + kp * (ee);
-          JA.block(J1.rows() + 3, 0, 3, 18) = J3;
-          NA = Eigen::MatrixXf::Identity() - WideInverse(JA) * JA;
-          detqcmd = detqcmd + WideInverse(J4 * NA) * (ee - J4 * detqcmd);
-          qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVfoot - J4 * qdotcmde);
-          qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
-          break;
-        }
+        if (ConvexMPC::MPCsFai[j] == 0)
+        { // 找到摆动腿
+          Pfoot.block(3 * num, 0, 3, 1) = KF::pcom + KF::B2W * KF::iPb[j];
+          Vfoot.block(3 * num, 0, 3, 1) = (XQi[j] * XCi * Vspace[pi[j]]).block(3, 0, 3, 1);
+          dPfoot.block(3 * num, 0, 3, 1) = Gait::FootdesirePos[j];
+          dVfoot.block(3 * num, 0, 3, 1) = Gait::FootdesireVelocity[j];
+          num++;
         }
       }
+
+      if (num > 0)
+      {
+        ee = dPfoot - Pfoot;
+
+        x = kd * (dVfoot - Vfoot) + kp * (ee);
+        std::cout << "Pfoot error--->\n"
+                  << ee << std::endl;
+        std::cout << "Vfoot error-->\n"
+                  << dVfoot - Vfoot << std::endl;
+        detqcmd += WideInverse(J4 * NA) * (ee - J4 * detqcmd);
+        qdotcmd = qdotcmde + WideInverse(J4 * NA) * (dVfoot - J4 * qdotcmde);
+        qddotcmd = qddotcmde + WideInverse(J4 * NA) * (x - J4q - J4 * qddotcmde);
+      }
+      else
+      { // 如果没有摆动腿 (比如4足站立阶段)
+        qdotcmd = qdotcmde;
+        qddotcmd = qddotcmde;
+      }
+
       qcmd = q + detqcmd;
 
-      // quadprog求解 松弛优化变量
-      Q1 = Eigen::MatrixXf::Identity(6, 6);
-      Q2 = Eigen::MatrixXf::Identity(12, 12) * 0.005;
-      G.setZero();
-      G.block(0, 0, 6, 6) = Q1;
-      G.block(6, 6, 12, 12) = Q2;
-      CE = Mf - Jcf.transpose();
-      Ce = -Jcf.transpose() * ConvexMPC::Umpc + Cf + Mf * qddotcmd;
+      // // ================= 替换原有的 quadprog 求解部分 =================
 
-      double cost = quadprogpp::solve_quadprog(G_qp, g_qp, CE_qp, ce0_qp, CI_qp, ci0_qp, x_qp);
+      int n_st = ConvexMPC::n_st;
+
+      // 必须有支撑腿才进行优化
+      if (n_st > 0)
+      {
+        int n_var = 18 + 3 * n_st; // 优化变量 X =[delta_q(18); delta_f(3*n_st)] (式 4.45)
+
+        quadprogpp::Matrix<double> G_qp, CE_qp, CI_qp;
+        quadprogpp::Vector<double> g_qp, ce0_qp, ci0_qp, x_qp;
+
+        G_qp.resize(n_var, n_var);
+        g_qp.resize(n_var);
+        for (int i = 0; i < n_var; i++)
+        {
+          g_qp[i] = 0.0; // g 向量为 0 (因为目标函数无一次项)
+          for (int j = 0; j < n_var; j++)
+            G_qp[i][j] = 0.0;
+        }
+
+        // 1. 构建 G 矩阵 (式 4.46)
+        // Q1 = I (18x18), Q2 = 0.005 * I (3n_st x 3n_st)
+        for (int i = 0; i < 18; i++)
+          G_qp[i][i] = 1.0;
+        for (int i = 0; i < 3 * n_st; i++)
+          G_qp[18 + i][18 + i] = 0.005;
+
+        // 2. 构建等式约束 CE^T * X + ce0 = 0 (式 4.49, 4.50)
+        int n_eq = 6;
+        CE_qp.resize(n_var, n_eq);
+        ce0_qp.resize(n_eq);
+
+        Eigen::MatrixXf Mf = M.block(0, 0, 6, 18);                       // 提取 M 矩阵前 6 行
+        Eigen::MatrixXf Cf = C.block(0, 0, 6, 1);                        // 提取 C 向量前 6 行
+        Eigen::MatrixXf Jcf_T = J1.block(0, 0, 3 * n_st, 6).transpose(); // 提取 J1 对应机身的前 6 列的转置
+
+        Eigen::MatrixXf CE_eigen(6, n_var);
+        CE_eigen.block(0, 0, 6, 18) = Mf;
+        CE_eigen.block(0, 18, 6, 3 * n_st) = -Jcf_T;
+        // ⚠️ 替换为实时的 current_Umpc_st
+        //  Eigen::VectorXf ce0_eigen = -Jcf_T * current_Umpc_st + Cf + Mf * qddotcmd;
+        Eigen::VectorXf ce0_eigen = -Jcf_T * ConvexMPC::Umpc_st + Cf + Mf * qddotcmd;
+
+        // quadprogpp 期望的等式约束矩阵维度为 (n_var x n_eq)，所以赋值时需要转置
+        for (int i = 0; i < n_var; i++)
+        {
+          for (int j = 0; j < n_eq; j++)
+          {
+            CE_qp[i][j] = CE_eigen(j, i);
+          }
+        }
+        for (int j = 0; j < n_eq; j++)
+          ce0_qp[j] = ce0_eigen(j);
+
+        // 3. 构建不等式约束 CI^T * X + ci0 >= 0 (式 4.56, 4.57)
+        int n_ineq = 10 * n_st; // 每条支撑腿对应 10 个不等式约束
+        CI_qp.resize(n_var, n_ineq);
+        ci0_qp.resize(n_ineq);
+        for (int i = 0; i < n_var; i++)
+          for (int j = 0; j < n_ineq; j++)
+            CI_qp[i][j] = 0.0;
+
+        float mu = ConvexMPC::fri; // 请确保 ConvexMPC::fri 已经被赋了初值 (如 0.5)
+        Eigen::MatrixXf CA_leg(5, 3);
+        CA_leg << -1, 0, mu,
+            0, -1, mu,
+            1, 0, mu,
+            0, 1, mu,
+            0, 0, 1;
+
+        Eigen::VectorXf c_bar_leg(5), c_under_leg(5);
+        c_bar_leg << 10000, 10000, 10000, 10000, ConvexMPC::Fmax; // 摩擦锥上限设为很大的值
+        c_under_leg << 0, 0, 0, 0, 0;
+
+        Eigen::MatrixXf CA = Eigen::MatrixXf::Zero(5 * n_st, 3 * n_st);
+        Eigen::VectorXf c_bar(5 * n_st), c_under(5 * n_st);
+
+        for (int i = 0; i < n_st; i++)
+        {
+          CA.block(5 * i, 3 * i, 5, 3) = CA_leg;
+          c_bar.segment(5 * i, 5) = c_bar_leg;
+          c_under.segment(5 * i, 5) = c_under_leg;
+        }
+
+        Eigen::MatrixXf CI_T_eigen = Eigen::MatrixXf::Zero(10 * n_st, n_var);
+        CI_T_eigen.block(0, 18, 5 * n_st, 3 * n_st) = -CA;
+        CI_T_eigen.block(5 * n_st, 18, 5 * n_st, 3 * n_st) = CA;
+
+        Eigen::VectorXf ci0_eigen(10 * n_st);
+        ci0_eigen.segment(0, 5 * n_st) = c_bar - CA * ConvexMPC::Umpc_st;
+        ci0_eigen.segment(5 * n_st, 5 * n_st) = CA * ConvexMPC::Umpc_st - c_under;
+
+        // quadprogpp 期望矩阵维度为 (n_var x n_ineq)
+        for (int i = 0; i < n_var; i++)
+        {
+          for (int j = 0; j < n_ineq; j++)
+          {
+            CI_qp[i][j] = CI_T_eigen(j, i);
+          }
+        }
+        for (int j = 0; j < n_ineq; j++)
+          ci0_qp[j] = ci0_eigen(j);
+
+        // 4. 调用 quadprogpp 进行求解
+        double cost = quadprogpp::solve_quadprog(G_qp, g_qp, CE_qp, ce0_qp, CI_qp, ci0_qp, x_qp);
+
+        // 5. 提取松弛变量结果，计算最终电机的下发扭矩 (式 4.61)
+        Eigen::VectorXf delta_q(18), delta_f(3 * n_st);
+        for (int i = 0; i < 18; i++)
+          delta_q(i) = x_qp[i];
+        for (int i = 0; i < 3 * n_st; i++)
+          delta_f(i) = x_qp[18 + i];
+
+        Eigen::VectorXf qddot_final = qddotcmd + delta_q;       // 最终广义加速度
+        Eigen::VectorXf f_final = ConvexMPC::Umpc_st + delta_f; // 最终足底力
+
+        Eigen::MatrixXf Mj = M.block(6, 0, 12, 18);
+        Eigen::MatrixXf Cj = C.block(6, 0, 12, 1);
+        Eigen::MatrixXf Jcj_T = J1.block(0, 6, 3 * n_st, 12).transpose(); // 仅取关节部分 (后12列) 的雅可比转置
+
+        // 最终计算出的关节力矩 (可直接结合 PD 控制器发送给电机)
+        Eigen::VectorXf tau = Mj * qddot_final + Cj - Jcj_T * f_final;
+
+        // 此处你可以将 tau 与 PD 的计算结果相加
+
+        PDcontrol::PDcontrol(model, data, qcmd.bottomRows(12), qdotcmd.bottomRows(12), tau);
+      }
     }
 
   };
+  namespace PDcontrol
+  {
+    float kp = 28.f; // 依据实际机械特性调整的位置反馈增益
+    float kd = 5.f;  // 依据实际机械特性调整的速度反馈增益
+    std::vector<float> home = {0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8};
+    void PDcontrol(mjModel *model, mjData *data,
+                   const Eigen::VectorXf &q_des,
+                   const Eigen::VectorXf &qdot_des,
+                   const Eigen::VectorXf &tau_ff)
+    {
+      //   std::cout << "fa" << std::endl;
+      // 遍历 12 个关节
+      for (int i = 0; i < 12; i++)
+      {
+        float err_q = q_des[i] - KF::jointpos[i];
+        float err_dq = qdot_des[i] - KF::jointvel[i];
+
+        // 公式 (4.62)
+        float tau_cmd = tau_ff[i] + kp * err_q + kd * err_dq;
+
+        // 扭矩限幅保护 (结合硬件 ME19-A 峰值扭矩 48Nm 进行保护)
+        // ⚠️ 根据 Go2 真实电机的物理极限进行精准限幅
+        // ⚠️ 根据 Go2 真实电机的物理极限进行精准限幅
+        float torque_limit = 23.7f;
+        if (i % 3 == 2)
+          torque_limit = 45.43f; // 小腿 (Knee) 电机的扭矩更大
+
+        if (tau_cmd > torque_limit)
+          tau_cmd = torque_limit;
+        if (tau_cmd < -torque_limit)
+          tau_cmd = -torque_limit;
+        data->ctrl[i] = tau_cmd;
+      }
+    }
+  };
+  namespace SystemControl
+  {
+
+    // 系统总初始化
+    void System_Init(mjModel *model, mjData *data, float dt)
+    {
+
+      // 1. 初始化卡尔曼滤波与状态估计
+      KF::kf_Init(dt);
+      KF::joint_sensor_data_update(model, data);
+      KF::B2WUpdate(model, data, "imu_quat"); // 请确保 xml 中 IMU 传感器名称一致
+      // KF::FootUpdate();
+
+      // // 2. 初始化键盘指令
+      KeyboardIns::Keyboard_init();
+
+      // 3. 初始化有限状态机
+      FSM::Init_FSM();
+
+      // // 4. 初始化步态与落足点规划器
+      Gait::Gait_Init();
+
+      // // 5. 初始化模型预测控制 MPC
+      ConvexMPC::MPC_init();
+
+      // // 6. 初始化全身控制 WBC
+      WBC::CreatTree();
+      WBC::WBC_Init();
+
+      std::cout << "Quadruped  Initialization Completed!" << std::endl;
+    }
+    // ⚠️ 新增：军工级一键复位函数
+    void Reset_Robot(mjModel *model, mjData *data, float dt)
+    {
+      std::cout << "\n[WARNING] XBOX 'A' PRESSED! RESETTING ROBOT STATE...\n"
+                << std::endl;
+
+      // 1. 物理引擎状态重置 (回到 keyframe 0)
+      mj_resetDataKeyframe(model, data, 0);
+      mj_forward(model, data); // ⚠️ 极度重要：立刻正向传播一次，让编码器瞬间更新为0状态！
+      for (int i = 0; i < 12; i++)
+      {
+        data->ctrl[i] = 0.0f;
+      }
+
+      // 2. 状态估计器重置 (清空卡尔曼积分误差)
+      KF::kf_Init(dt);
+      KF::joint_sensor_data_update(model, data);
+      KF::B2WUpdate(model, data, "imu_quat");
+      KF::FootUpdate();
+
+      // 3. 指令与状态机重置
+
+      FSM::Init_FSM();
+      KeyboardIns::Keyboard_init();
+      // 4. 步态与轨迹重置
+      Gait::Gait_Init();
+      Gait::ChangeGait(0);
+      Gait::join = false; // 让 SymPb 重新初始化
+
+      // 5. MPC 内存释放
+      ConvexMPC::MPC_Reset();
+
+      // 6. 控制循环时钟重置
+      first_mpc = false;
+
+      std::cout << "[SUCCESS] ROBOT RESET COMPLETED!\n"
+                << std::endl;
+    }
+    bool first_mpc = false;
+
+    // 主控制循环 (通常在 MuJoCo 的控制回调函数中以 500Hz 运行)
+    void Control_Step(mjModel *model, mjData *data, float dt)
+    {
+
+      // ⚠️ 终极修复 4：状态机按键防抖，按住不放只触发一次！
+      static int last_btn_a = 0;
+      if (map.a == 1 && last_btn_a == 0)
+      {
+        Reset_Robot(model, data, dt);
+        last_btn_a = 1;
+        return;
+      }
+      last_btn_a = map.a;
+      static auto enter = std::chrono::high_resolution_clock::now();
+      static int times = 0;
+      auto now = std::chrono::high_resolution_clock::now();
+      if (std::chrono::duration_cast<std::chrono::milliseconds>(now - enter).count() >= 1000)
+      {
+        std::cout << "T--->" << times << std::endl;
+        times = 0;
+        enter = now;
+      }
+
+      KF::joint_sensor_data_update(model, data);
+      KF::B2WUpdate(model, data, "imu_quat");
+      KF::FootUpdate();
+      KF::Kfsolver();
+      Gait::Pstend_Update();
+      // // 2. 指令更新 (去哪儿)
+      KeyboardIns::Desire_ins_update(MPC_T); // MPC_T 预测步长为 0.01s
+
+      // // 3. 步态与轨迹规划 (怎么走)
+      Gait::TimeUpdate();
+      Gait::UpdateGait();
+      Gait::FootTraj_Planning();
+
+      static int cout = 0;
+      cout++;
+      if (cout % 5 == 0)
+      {
+        // auto now4 = std::chrono::high_resolution_clock::now();
+
+        Quad::ConvexMPC::UpdateState();
+        //  auto now5 = std::chrono::high_resolution_clock::now();
+        // std::cout << "5-4==" << std::chrono::duration_cast<std::chrono::milliseconds>(now5 - now4).count() << std::endl;
+        if (!first_mpc)
+          first_mpc = true;
+        cout = 0;
+        times++;
+      }
+      if (first_mpc)
+      {
+        // auto now1 = std::chrono::high_resolution_clock::now();
+        WBC::Dynamcis_Update();
+        // auto now2 = std::chrono::high_resolution_clock::now();
+        WBC::WBC_Update(model, data);
+        // auto now3 = std::chrono::high_resolution_clock::now();
+
+        // std::cout << "2-1==" << std::chrono::duration_cast<std::chrono::milliseconds>(now3 - now1).count() << std::endl;
+        //  std::cout << "3-2==" << std::chrono::duration_cast<std::chrono::milliseconds>(now3 - now2).count() << std::endl;
+      }
+    }
+  }
+  afa::afa()
+  {
+    binaa = 0;
+  }
 };

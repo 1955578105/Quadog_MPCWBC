@@ -19,11 +19,13 @@ using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Eigen::Matrix3f;
 namespace prog = quadprogpp;
-#define h 10
+#define h 20
+
+#define MPC_T 0.01
 namespace Quad
 {
 
-  inline constexpr float hx = 0.1934f; // 使用 constexpr 表示编译时常量
+  inline constexpr float hx = 0.1934f; //
   inline constexpr float hy = 0.0465f;
   inline constexpr float l1 = 0.0955f;
   inline constexpr float l2 = 0.213f;
@@ -31,9 +33,16 @@ namespace Quad
 
   namespace PDcontrol
   {
-
+    void PDcontrol(mjModel *model, mjData *data,
+                   const Eigen::VectorXf &q_des,
+                   const Eigen::VectorXf &qdot_des,
+                   const Eigen::VectorXf &tau_ff);
   };
-
+  namespace SystemControl
+  {
+    void System_Init(mjModel *model, mjData *data, float dt);
+    void Control_Step(mjModel *model, mjData *data, float dt);
+  };
   namespace FSM
   {
     enum FSMstate
@@ -53,6 +62,7 @@ namespace Quad
     extern Busystate busystate;
     void Init_FSM();
     int StateTran(const FSMstate &Goalstate);
+    extern FSMstate lastState;
   };
   namespace Gait
   {
@@ -76,6 +86,7 @@ namespace Quad
     extern vector<Eigen::Vector3f> Pcomtouch, Psymtouch, P1, P2, P3, P4, Pswend;
     extern vector<Eigen::Vector3f> SwingTrajectory; // 轨迹就是 位置 速度
     extern vector<Eigen::Vector3f> FootdesirePos, FootdesireVelocity, Pstend, Pstsw;
+    void ChangeGait(int gait);
   };
 
   namespace KF
@@ -83,9 +94,9 @@ namespace Quad
     extern RMT B2I, I2I0, I02W, B2W;
     extern vector<float> Quat;
     extern float Faiz, Faix, Faiy;
-    void B2WUpdate(const mjModel *model, const mjData *data, const std::string &sensor_name = "imu_quat");
+    void B2WUpdate(mjModel *model, mjData *data, const std::string &sensor_name);
     extern Eigen::VectorXf jointpos, jointvel, jointForce;
-    void joint_sensor_data_update(const mjModel *model, const mjData *data);
+    void joint_sensor_data_update(mjModel *model, mjData *data);
     extern Eigen::Vector3f Flipb, Fripb, Rlipb, Rripb;     // 足底位置 在本体系中
     extern Eigen::Vector3f FliPbv, FriPbv, RliPbv, RriPbv; //  足底速度 在本体系中
     extern Eigen::Vector3f qvfr, qvfl, qvrr, qvrl;         // 关节速度向量
@@ -115,7 +126,7 @@ namespace Quad
     extern Eigen::VectorXf Z, A, _A, N, N_;
     extern Eigen::Vector3f Tao, dFai;       // dFai  是期望角度向量
     extern vector<Eigen::VectorXf> desirex; // 期望状态
-    void Update_ins(mujoco::Simulate *sim);
+    void Update_ins();
     extern Eigen::MatrixXf D; // 期望轨迹序列
   };
 
@@ -129,8 +140,21 @@ namespace Quad
     Eigen::Matrix3f QUa2Mat(float w, float x, float y, float z);
     Eigen::Matrix3f getRotationMatrix(double psi, double theta, double phi);
     extern Eigen::MatrixXf Q, R, Aqp, Bqp, D;
+    extern Eigen::Vector4f MPCsFai;
   };
+  namespace SystemControl
+  {
+    void System_Init(mjModel *model, mjData *data, float dt);
+    extern bool first_mpc;
 
+  };
+  class afa
+  {
+  public:
+    afa();
+
+    int binaa;
+  };
 };
 
 #endif
