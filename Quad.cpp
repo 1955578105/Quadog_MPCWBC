@@ -946,6 +946,7 @@ namespace Quad
       Eigen::MatrixXf t(5, 3);
       t << -1, 0, fri, 0, -1, fri, 1, 0, fri, 0, 1, fri, 0, 0, 1;
       Eigen::VectorXf vub(5);
+      // vub << 1e5, 1e5, 1e5, 1e5, Fmax;
       vub << 100000.0f, 100000.0f, 100000.0f, 100000.f, Fmax;
 
       for (int i = 0; i < h; i++)
