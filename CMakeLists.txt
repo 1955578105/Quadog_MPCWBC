@@ -8,7 +8,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/simulate)
 set(CMAKE_BUILD_TYPE Release)
 # CMakeLists.txt 终极编译选项
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -ffast-math")
+# set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -march=native -ffast-math")
 
 #release版本
 set(MUJOCO_PATH "/home/mujoco/mujoco-3.3.0-linux-x86_64/mujoco-3.3.0")

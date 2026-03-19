@@ -14,14 +14,18 @@
 #include <memory>
 #include <list>
 #include <vector>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <sstream>
 
 using namespace std;
 #include "Self_mujoco_lib.h"
 using RMT = Eigen::Matrix3f;
 namespace prog = quadprogpp;
-#define h 19
+#define h 20
 
-#define MPC_T 0.01
+#define MPC_T 0.01f
 namespace Quad
 {
 
@@ -146,5 +150,30 @@ namespace Quad
   };
 
 };
+
+class DataVisualizer
+{
+private:
+  int sock;
+  struct sockaddr_in serv_addr;
+
+public:
+  DataVisualizer(const char *ip = "127.0.0.1", int port = 9876)
+  {
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+    serv_addr.sin_addr.s_addr = inet_addr(ip);
+  }
+
+  void sendData(const std::string &json_str)
+  {
+    sendto(sock, json_str.c_str(), json_str.length(), 0,
+           (struct sockaddr *)&serv_addr, sizeof(serv_addr));
+  }
+};
+
+// 全局静态实例
+static inline DataVisualizer visualizer;
 
 #endif
