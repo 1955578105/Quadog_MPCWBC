@@ -167,6 +167,13 @@ namespace Quad
 
     void UpdateGait()
     {
+      if (GaitPeriod <= 1e-6f)
+      {
+        sFai.setOnes();
+        tst.setOnes();
+        tsw.setZero();
+        return;
+      }
       // ⚠️ 修复 3：使用高精度取模，彻底解决长周期运行后的相位紊乱
       tng = fmod(Time, GaitPeriod);
       _tng = tng / GaitPeriod;
@@ -395,6 +402,7 @@ namespace Quad
 
       // 3. 偏航角 Yaw (Faiz)
       Faiz = std::atan2(2.0f * (w * z + x * y), 1.0f - 2.0f * (y * y + z * z));
+      std::cout << "Faiz==" << Faiz << std::endl;
       B2W << 1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * w * z, 2 * x * z + 2 * w * y,
           2 * x * y + 2 * w * z, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * w * x,
           2 * x * z - 2 * w * y, 2 * y * z + 2 * w * x, 1 - 2 * x * x - 2 * y * y;
@@ -748,8 +756,7 @@ namespace Quad
           // dFaiy = atan(Tao[0] / Tao[2]);
           // dFai << dFaix, dFaiy, dFaiz;
           Eigen::Vector3f fai = {KF::Faix, KF::Faiy, KF::Faiz};
-          std::cout << "cFaix-->" << KF::Faix << std::endl;
-          std::cout << "cFaiy-->" << KF::Faiy << std::endl;
+
           desirex[i] << fai, KF::pcom, KF::B2W * KF::Wb, KF::vcom, -9.81; // 此为当前状态
         }
         dFaiz = dFaiz + dWzO * MPCtime;
@@ -1192,8 +1199,10 @@ namespace Quad
       }
       else if (node->num == 1)
       {
+        // TFMatrix << KF::B2W, Eigen::Matrix3f::Zero(),
+        //     KF::B2W * KF::skewSymmetric(KF::pcom), KF::B2W;
         TFMatrix << KF::B2W, Eigen::Matrix3f::Zero(),
-            KF::B2W * KF::skewSymmetric(KF::pcom), KF::B2W;
+            KF::skewSymmetric(KF::pcom) * KF::B2W, KF::B2W;
         return TFMatrix;
       }
       else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
@@ -1245,7 +1254,8 @@ namespace Quad
       else if (node->num == 1)
       {
         TFMatrix << KF::B2W,
-            KF::B2W * KF::skewSymmetric(KF::pcom),
+            // KF::B2W * KF::skewSymmetric(KF::pcom),
+            KF::skewSymmetric(KF::pcom) * KF::B2W,
             Eigen::Matrix3f::Zero(),
             KF::B2W;
         return TFMatrix;
@@ -1466,6 +1476,8 @@ namespace Quad
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
     {
+      M.setZero();
+      C.setZero();
 
       int n_st = 0;
       for (int i = 0; i < 4; i++)
@@ -1520,7 +1532,8 @@ namespace Quad
           C.block(i + 4, 0, 1, 1) = Si[i].transpose() * fi[i - 1];
         if (Vnode[i]->parent.lock()->num != 0)
         {
-          fi[Vnode[i]->parent.lock()->num - 1] = fi[Vnode[i]->parent.lock()->num - 1] + Transform_C2P(Vnode[i]) * fi[i - 1];
+          // fi[Vnode[i]->parent.lock()->num - 1] = fi[Vnode[i]->parent.lock()->num - 1] + Transform_C2P(Vnode[i]) * fi[i - 1];
+          fi[Vnode[i]->parent.lock()->num - 1] = fi[Vnode[i]->parent.lock()->num - 1] + Transform_C2PF(Vnode[i]) * fi[i - 1];
         }
 
         Ic[i - 1] = I[i - 1];
@@ -1608,7 +1621,14 @@ namespace Quad
 
     void WBC_Update(const mjModel *model, mjData *data)
     {
+      J2.setZero(3, 18);
+      J3.setZero(3, 18);
+      J2.block<3, 3>(0, 0) = KF::B2W;
+      J3.block<3, 3>(0, 3) = KF::B2W;
 
+      J2q.setZero();
+      Eigen::Vector3f v_body = KF::B2W.transpose() * KF::vcom;
+      J3q = KF::B2W * (KF::Wb.cross(KF::B2W.transpose() * KF::vcom));
       //  std::cout << "WBC_Update" << std::endl;
       //===================================
       // 0. 准备当前状态 q 和 qdot
@@ -1616,9 +1636,9 @@ namespace Quad
       q.block(3, 0, 3, 1) = KF::pcom;
       q.block(6, 0, 12, 1) = KF::jointpos;
 
-      // qdot.block(0, 0, 3, 1) = KF::Wb;
-      // qdot.block(3, 0, 3, 1) = KF::B2W.transpose() * KF::vcom;
-      // qdot.block(6, 0, 12, 1) = KF::jointvel;
+      qdot.block(0, 0, 3, 1) = KF::Wb;
+      qdot.block(3, 0, 3, 1) = KF::B2W.transpose() * KF::vcom;
+      qdot.block(6, 0, 12, 1) = KF::jointvel;
 
       // 初始化层级矩阵与零空间
       Eigen::MatrixXf J_prev = J1;

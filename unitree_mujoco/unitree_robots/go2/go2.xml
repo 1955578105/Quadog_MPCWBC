@@ -311,11 +311,11 @@
     <jointactuatorfrc name="RL_calf_torque" joint="RL_calf_joint" noise="0.01" />
 
     <!-- 输出四元数 -->
-    <framequat name="imu_quat" objtype="site" objname="imu" noise="0.1"/>
+    <framequat name="imu_quat" objtype="site" objname="imu" />
     <!-- 线加速度 -->
-    <accelerometer name="imu_acc" site="imu"  noise="0.1"/>
+    <accelerometer name="imu_acc" site="imu"  />
     <!-- 角速度 --> 
-     <gyro name="imu_gyro" site="imu"  noise="0.1"/>
+     <gyro name="imu_gyro" site="imu"  />
 
 
     
