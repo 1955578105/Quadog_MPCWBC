@@ -83,7 +83,7 @@ namespace Quad
 
     void Gait_Init()
     {
-      // ⚠️ 修复：为所有摆动相、支撑相的坐标向量分配内存 (4条腿)
+
       FootdesirePos.resize(4, Eigen::Vector3f::Zero());
       FootdesireVelocity.resize(4, Eigen::Vector3f::Zero());
       Pstend.resize(4, Eigen::Vector3f::Zero());
@@ -132,7 +132,7 @@ namespace Quad
       if (FSM::currentState == FSM::FSMstate::move)
       {
         Time += 0.002;
-        // ⚠️ 修复 3：防止浮点数溢出
+
         if (Time > 1000.0f * GaitPeriod)
           Time = fmod(Time, GaitPeriod);
       }
@@ -174,7 +174,7 @@ namespace Quad
         tsw.setZero();
         return;
       }
-      // ⚠️ 修复 3：使用高精度取模，彻底解决长周期运行后的相位紊乱
+
       tng = fmod(Time, GaitPeriod);
       _tng = tng / GaitPeriod;
       // n = Time / GaitPeriod + 1;
@@ -203,7 +203,6 @@ namespace Quad
           tsw[i] = 0.0f;
       }
 
-      // ⚠️ 新增：强制全站立模式处理
       if (FSM::currentState == FSM::FSMstate::stand)
       {
         for (int i = 0; i < 4; i++)
@@ -312,7 +311,6 @@ namespace Quad
           FootdesireVelocity[i][0] = Pstsw[i][0] * (6.0f * u - 6.0f * pow(u, 2)) / swperiod;
           FootdesireVelocity[i][1] = Pstsw[i][1] * (6.0f * u - 6.0f * pow(u, 2)) / swperiod;
 
-          // // 2. ⚠️ 终极平滑修复：Z 轴使用 MIT 标准的“正弦抬腿”，消除一切冲击！
           float h_start = Pstend[i][2];
           float h_end = Pswend[i][2];
 
@@ -339,7 +337,7 @@ namespace Quad
 
         else
         {
-          // ⚠️ 防御机制：当腿落地时，必须强行清零速度，防止 WBC 继续追踪虚假残留速度！
+
           FootdesireVelocity[i].setZero();
         }
       }
@@ -389,7 +387,7 @@ namespace Quad
       float x = Quat[1];
       float y = Quat[2];
       float z = Quat[3];
-      // ⚠️ 终极救命修复：手动从四元数解析出绝对安全、不跳变的 Roll, Pitch, Yaw！
+
       // 1. 横滚角 Roll (Faix)
       Faix = std::atan2(2.0f * (w * x + y * z), 1.0f - 2.0f * (x * x + y * y));
 
@@ -513,6 +511,7 @@ namespace Quad
     Eigen::Matrix3f iden3 = Eigen::Matrix3f::Identity();
     Eigen::Matrix3f _3x3 = Eigen::Matrix3f::Zero();
     Eigen::MatrixXf _3x12(3, 12);
+
     Eigen::MatrixXf _12x3(12, 3);
 
     Eigen::MatrixXf iden12(12, 12);
@@ -522,7 +521,11 @@ namespace Quad
     Eigen::Vector3f pcom, vcom;
     void kf_Init(float t) // t 是控制步长
     {
-      // ⚠️ 修复：为四条腿的足端位置向量分配空间
+      _3x12.setZero();
+      _12x3.setZero();
+      Q.setZero();
+      R.setZero();
+
       iPb.resize(4, Eigen::Vector3f::Zero());
 
       iden12 = Eigen::MatrixXf ::Identity(12, 12);
@@ -596,7 +599,7 @@ namespace Quad
 
       _X = A * X + B * U;
       _P = A * P * (A.transpose()) + Q;
-      // ⚠️ 军工级优化：利用协方差矩阵的正定对称特性，使用 LDLT 分解替代粗暴的 inverse()
+
       Eigen::MatrixXf S = H * _P * H.transpose() + R;
 #ifdef solve
 #undef solve
@@ -605,7 +608,7 @@ namespace Quad
       K = _P * H.transpose() * S_inv;
 
       X = _X + K * (Z - H * _X);
-      // ⚠️ 保证协方差矩阵的严格对称性 (Joseph form)，防止浮点误差导致 P 变得不对称发散
+      // 保证协方差矩阵的严格对称性 (Joseph form)，防止浮点误差导致 P 变得不对称发散
       P = (iden18 - K * H) * _P;
       P = 0.5f * (P + P.transpose()); // 强制对称化保护！
       // K = (_P * (H.transpose())) * ((H * _P * H.transpose() + R).inverse());
@@ -683,7 +686,11 @@ namespace Quad
 
     void Keyboard_init()
     {
-      // ⚠️ 修复：h 为预测步长，需要记录 h+1 个状态，每个状态为 13 维向量
+      A.setZero();
+      _A.setZero();
+      N.setZero();
+      N_.setZero();
+      // h 为预测步长，需要记录 h+1 个状态，每个状态为 13 维向量
       desirex.resize(h + 1, Eigen::VectorXf::Zero(13));
       // dPO = {0, 0, 0.29};
       dFaiz = KF::Faiz; // 用当前偏航角初始 目标偏航角
@@ -694,11 +701,12 @@ namespace Quad
       return value < min ? min : (value > max ? max : value);
     }
     bool Lock_state = true;
+    Eigen::Vector3f lock_p;
     void Desire_ins_update(float MPCtime) // 这个仅能根据当前状态 估计下一次状态  ， 但是需要估计未来多个时间段的状态
     {
 
       dVyb = clip(((float)-map.lx) / 32767.0f, -1.f, 1.f);
-      dVxb = clip(((float)-map.ly) / 32767.0f, -1.f, 1.f);
+      dVxb = clip(((float)-map.ly) / 32767.0f * 1.5f, -1.5f, 1.5f);
       dWzb = clip(((float)-map.rx) / 32767.0f, -1.f, 1.f);
       std::cout << "dVxb-->" << dVxb << std::endl;
       std::cout << "dVyb-->" << dVyb << std::endl;
@@ -709,7 +717,7 @@ namespace Quad
         // std::
         //   SystemControl::first_mpc = false;
         FSM::currentState = FSM::FSMstate::stand;
-        // dPO = KF::pcom;
+        lock_p = KF::pcom;
         //  Lock_state = true;
       }
       else if ((dVxb != 0 || dVyb != 0 || dWzb != 0) && FSM::currentState == FSM::FSMstate::stand)
@@ -768,9 +776,10 @@ namespace Quad
         dVO = TFZ * dVb;
 
         dPO = dPO + dVO * MPCtime;
-        dPO[2] = dHb; // 期望机身高度
-
+        // if (FSM::currentState == FSM::FSMstate::stand)
+        //   dPO = lock_p;
         // 计算期望滚摆角
+        dPO[2] = dHb; // 期望机身高度
         Tao = TFZ.inverse() * N_;
         dFaix = asin(Tao[1]);
         dFaiy = atan(Tao[0] / Tao[2]);
@@ -806,10 +815,10 @@ namespace Quad
     int n_st = 0;                // 当前支撑腿数量
 
     float Fmax = 250.0f;
-    float fri = 0.4f; // 摩擦系数
+    float fri = 0.33f; // 摩擦系数
     Eigen::Vector4f MPCsFai;
 
-    // ⚠️ 工业级优化：使用全局静态指针管理求解器，杜绝内存反复分配
+    // 使用全局静态指针管理求解器，杜绝内存反复分配
     qpOASES::QProblem *qp_solver = nullptr;
     int last_n_vars = 0;
 
@@ -1142,14 +1151,10 @@ namespace Quad
       }
       else if (node->num == 1)
       {
-        // TFMatrix << KF::B2W.inverse(), Eigen::Matrix3f::Zero(),
-        //     -KF::B2W.inverse() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
-        // return TFMatrix;
-        //=======================================
+
         TFMatrix << KF::B2W.transpose(), Eigen::Matrix3f::Zero(),
             -KF::B2W.transpose() * KF::skewSymmetric(KF::pcom), KF::B2W.transpose();
         return TFMatrix;
-        //=======================================
       }
       else if (node->num == 2 || node->num == 5 || node->num == 8 || node->num == 11)
       {
@@ -1320,7 +1325,7 @@ namespace Quad
     Eigen::MatrixXf XCi(6, 6), C(18, 1), M(18, 18);
     vector<int> pi;
 
-    // ⚠️ 工业级优化：使用阻尼最小二乘法取代 SVD，速度提升百倍，同时保证绝对的非奇异性
+    // 阻尼最小二乘法
     Eigen::MatrixXf WideInverse(const Eigen::MatrixXf &mat)
     {
       if (mat.rows() == 0 || mat.cols() == 0)
@@ -1350,7 +1355,7 @@ namespace Quad
     }
     void WBC_Init()
     {
-      // ⚠️ 修复：必须先为 vector 分配空间，总共 14 个刚体节点 (0~13)
+      // 先为 vector 分配空间，总共 14 个刚体节点 (0~13)
       Si.resize(14);
       X02I.resize(14);
       X02If.resize(14);
@@ -1421,36 +1426,59 @@ namespace Quad
 
       // //
       vector<Eigen::Vector3f> P;
-      P.resize(4);
+      P.resize(13);
       vector<Eigen::Vector4f> quat;
       quat.resize(13);
       vector<float> mass;
       mass.resize(4);
       vector<Eigen::Vector3f> diagnertia;
       diagnertia.resize(4);
-      P[0] << 0.021112, 0, -0.005366;
+
+      P[0] << 0.021112f, 0.0f, -0.005366f;
+
+      // 1~3: FR
+      P[1] << -0.0054f, -0.00194f, -0.000105f;       // FR_hip
+      P[2] << -0.00374f, 0.0223f, -0.0327f;          // FR_thigh
+      P[3] << 0.00629595f, 0.000622121f, -0.141417f; // FR_calf
+
+      // 4~6: FL
+      P[4] << -0.0054f, 0.00194f, -0.000105f;         // FL_hip
+      P[5] << -0.00374f, -0.0223f, -0.0327f;          // FL_thigh
+      P[6] << 0.00629595f, -0.000622121f, -0.141417f; // FL_calf
+
+      // 7~9: RR
+      P[7] << 0.0054f, -0.00194f, -0.000105f;        // RR_hip
+      P[8] << -0.00374f, 0.0223f, -0.0327f;          // RR_thigh
+      P[9] << 0.00629595f, 0.000622121f, -0.141417f; // RR_calf
+
+      // 10~12: RL
+      P[10] << 0.0054f, 0.00194f, -0.000105f;          // RL_hip
+      P[11] << -0.00374f, -0.0223f, -0.0327f;          // RL_thigh
+      P[12] << 0.00629595f, -0.000622121f, -0.141417f; // RL_calf
+
       mass[0] = 6.921;
       diagnertia[0] << 0.107027, 0.0980771, 0.0244531;
-      P[1] << 0.0054, -0.00194, -0.000105;
       mass[1] = 0.678;
       diagnertia[1] << 0.00088403, 0.000596003, 0.000479967;
-      P[2] << -0.00374, 0.0223, -0.0327;
       mass[2] = 1.152;
       diagnertia[2] << 0.00594973, 0.00584149, 0.000878787;
-      P[3] << 0.00629595, 0.000622121, -0.141417;
       mass[3] = 0.241352;
       diagnertia[3] << 0.0014901, 0.00146356, 5.31397e-05;
 
       quat[0] << -0.000543471, 0.713435, -0.00173769, 0.700719;
+
       quat[1] << 0.498237, 0.505462, 0.499245, 0.497014;
       quat[2] << 0.551623, -0.0200632, 0.0847635, 0.829533;
       quat[3] << 0.703508, -0.00450087, 0.00154099, 0.710672;
+
       quat[4] << 0.497014, 0.499245, 0.505462, 0.498237;
       quat[5] << 0.829533, 0.0847635, -0.0200632, 0.551623;
       quat[6] << 0.710672, 0.00154099, -0.00450087, 0.703508;
+
       quat[7] << 0.499245, 0.497014, 0.498237, 0.505462;
       quat[8] << 0.551623, -0.0200632, 0.0847635, 0.829533;
       quat[9] << 0.703508, -0.00450087, 0.00154099, 0.710672;
+
       quat[10] << 0.505462, 0.498237, 0.497014, 0.499245;
       quat[11] << 0.829533, 0.0847635, -0.0200632, 0.551623;
       quat[12] << 0.710672, 0.00154099, -0.00450087, 0.703508;
@@ -1462,16 +1490,35 @@ namespace Quad
         //  I[i] = (R * diagnertia[r].asDiagonal() * R.transpose()) + mass[r] * (P[r].transpose() * P[r] * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
         //====================================================//====================================================
         Eigen::Matrix3f I_3x3 = (R * diagnertia[r].asDiagonal() * R.transpose()) +
-                                mass[r] * (P[r].dot(P[r]) * Eigen::Matrix3f::Identity() - P[r] * P[r].transpose());
-        // 2. 计算质心偏移向量的反对称矩阵 c_x
-        Eigen::Matrix3f c_cross = KF::skewSymmetric(P[r]);
+                                mass[r] * (P[i].dot(P[i]) * Eigen::Matrix3f::Identity() - P[i] * P[i].transpose());
+        // 计算质心偏移向量的反对称矩阵 c_x
+        Eigen::Matrix3f c_cross = KF::skewSymmetric(P[i]);
 
-        // 3. ⚠️ 修复：重设尺寸为 6x6，并依照公式 5.40 将 4 个块拼装成完整的六维空间惯量
+        // 重设尺寸为 6x6，并依照公式 5.40 将 4 个块拼装成完整的六维空间惯量
         I[i].resize(6, 6);
         I[i] << I_3x3, mass[r] * c_cross,
             mass[r] * c_cross.transpose(), mass[r] * Eigen::Matrix3f::Identity();
         //====================================================//====================================================//====================================================
       }
+    }
+
+    void WBC_Reset()
+    {
+      q.setZero();
+      qdot.setZero();
+      qddot.setZero();
+      qcmd.setZero();
+      qdotcmd.setZero();
+      qddotcmd.setZero();
+      qdotcmde.setZero();
+      qddotcmde.setZero();
+      detqcmd.setZero();
+      M.setZero();
+      C.setZero();
+      J1.resize(0, 18);
+      J4.resize(0, 18);
+      J1q.resize(0, 1);
+      J4q.resize(0, 1);
     }
     // multi-Rigid-Body dynamics algorithm
     void Dynamcis_Update()
@@ -1499,7 +1546,7 @@ namespace Quad
       J4q.setZero();
       int J1num = 0;
       int J4num = 0;
-      // ⚠️ 修复 2：Eigen 使用 << 逗号初始化前，必须提前分配好尺寸！
+      // Eigen 使用 << 逗号初始化前，必须提前分配好尺寸！
       qidot[0].resize(6, 1);
       qidot[0] << KF::Wb, KF::B2W.transpose() * KF::vcom;
       for (int i = 0; i < 12; ++i)
@@ -1576,12 +1623,12 @@ namespace Quad
       for (int i = 0; i < 4; ++i)
       {
         int j = pi[i];
-        // ⚠️ 修复 1
+        //
         XQi[i].resize(6, 6);
         XQi[i] << X02I[pi[i]].block(3, 3, 3, 3).transpose(), Eigen::Matrix3f::Zero(),
             Eigen::Matrix3f::Zero(), X02I[pi[i]].block(3, 3, 3, 3).transpose();
         Eigen::MatrixXf Xjpi = Eigen::MatrixXf::Identity(6, 6);
-        // ⚠️ 修复 2：Jb 使用 .block 赋值前，必须分配 6x18 的尺寸并清零！
+        // Jb 使用 .block 赋值前，必须分配 6x18 的尺寸并清零！
         Jb[i].resize(6, 18);
         Jb[i].setZero();
         Jb[i].block(0, pi[i] + 4, 6, 1) = Si[pi[i]];
@@ -1914,8 +1961,8 @@ namespace Quad
     float kd = 2.f;
     std::vector<float> home = {0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8, 0, 0.9, -1.8};
 
-    // ⚠️ 新增：根据 Go2 XML 提取的真实机械关节限位 (单位: rad)
-    // 顺序: FR(0,1,2), FL(3,4,5), RR(6,7,8), RL(9,10,11)
+    // 根据 Go2 XML 提取的真实机械关节限位 (单位: rad)
+    //  顺序: FR(0,1,2), FL(3,4,5), RR(6,7,8), RL(9,10,11)
     const float q_min[12] = {
         -1.0472f, -1.5708f, -2.7227f, // FR (侧摆, 前大腿, 小腿)
         -1.0472f, -1.5708f, -2.7227f, // FL
@@ -1942,7 +1989,7 @@ namespace Quad
     {
       for (int i = 0; i < 12; i++)
       {
-        // ⚠️ 军工级优化 1：对期望关节角进行限位截断！保护机械结构，防止死磕限位！
+        // 对期望关节角进行限位截断
         float safe_q_des = clamp(q_des[i], q_min[i], q_max[i]);
 
         float err_q = safe_q_des - KF::jointpos[i];
@@ -1970,31 +2017,23 @@ namespace Quad
     void System_Init(mjModel *model, mjData *data, float dt)
     {
 
-      // 1. 初始化卡尔曼滤波与状态估计
-      KF::kf_Init(dt);
+      //  初始化卡尔曼滤波与状态估计      KF::kf_Init(dt);
       KF::joint_sensor_data_update(model, data);
       KF::B2WUpdate(model, data, "imu_quat"); // 请确保 xml 中 IMU 传感器名称一致
-      // KF::FootUpdate();
 
-      // // 2. 初始化键盘指令
       KeyboardIns::Keyboard_init();
-
-      // 3. 初始化有限状态机
       FSM::Init_FSM();
 
-      // // 4. 初始化步态与落足点规划器
       Gait::Gait_Init();
 
-      // // 5. 初始化模型预测控制 MPC
       ConvexMPC::MPC_init();
 
-      // // 6. 初始化全身控制 WBC
       WBC::CreatTree();
       WBC::WBC_Init();
 
       std::cout << "Quadruped  Initialization Completed!" << std::endl;
     }
-    // ⚠️ 新增：军工级一键复位函数
+    // 一键复位函数
     void Reset_Robot(const mjModel *model, mjData *data, float dt)
     {
       std::cout << "\n[WARNING] XBOX 'A' PRESSED! RESETTING ROBOT STATE...\n"
@@ -2002,7 +2041,7 @@ namespace Quad
 
       // 1. 物理引擎状态重置 (回到 keyframe 0)
       mj_resetDataKeyframe(model, data, 0);
-      mj_forward(model, data); // ⚠️ 极度重要：立刻正向传播一次，让编码器瞬间更新为0状态！
+      mj_forward(model, data); // 正向传播
       for (int i = 0; i < 12; i++)
       {
         data->ctrl[i] = 0.0f;
@@ -2015,20 +2054,20 @@ namespace Quad
       KF::FootUpdate();
 
       // 3. 指令与状态机重置
-
       FSM::Init_FSM();
       KeyboardIns::Keyboard_init();
       // 4. 步态与轨迹重置
       Gait::Gait_Init();
+      Gait::SymPb.clear();
       Gait::ChangeGait(0);
       Gait::join = false; // 让 SymPb 重新初始化
 
       // 5. MPC 内存释放
       ConvexMPC::MPC_Reset();
-
+      ConvexMPC::MPC_init();
       // 6. 控制循环时钟重置
       first_mpc = false;
-
+      WBC::WBC_Reset();
       std::cout << "[SUCCESS] ROBOT RESET COMPLETED!\n"
                 << std::endl;
     }
@@ -2061,7 +2100,7 @@ namespace Quad
       KF::FootUpdate();
       KF::Kfsolver();
       Gait::Pstend_Update();
-      // // 2. 指令更新 (去哪儿)
+      // // 2. 指令更新
       KeyboardIns::Desire_ins_update(MPC_T); // MPC_T 预测步长为 0.01s
 
       // // 3. 步态与轨迹规划 (怎么走)
@@ -2104,9 +2143,8 @@ namespace Quad
 
         ss << "}";
 
-        // 注意：确保 visualizer 在外部作用域可见
         visualizer.sendData(ss.str());
-      }; // Lambda 定义结束的分号
+      };
 
       printorques(); // 调用 Lambda
     }
