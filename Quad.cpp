@@ -458,6 +458,7 @@ namespace Quad
     // 更新足端位置 和速度  雅可比
     void FootUpdate()
     {
+
       Flipb = {-l2 * sin(jointpos[4]) - l3 * sin(jointpos[4] + jointpos[5]) + hx,
                l1 * cos(jointpos[3]) + l3 * sin(jointpos[3]) * cos(jointpos[4] + jointpos[5]) + l2 * cos(jointpos[4]) * sin(jointpos[3]) + hy,
                l1 * sin(jointpos[3]) - l3 * cos(jointpos[3]) * cos(jointpos[4] + jointpos[5]) - l2 * cos(jointpos[3]) * cos(jointpos[4])};
@@ -473,6 +474,7 @@ namespace Quad
       Rripb = {-l2 * sin(jointpos[7]) - l3 * sin(jointpos[7] + jointpos[8]) - hx,
                -l1 * cos(jointpos[6]) + l3 * sin(jointpos[6]) * cos(jointpos[7] + jointpos[8]) + l2 * cos(jointpos[7]) * sin(jointpos[6]) - hy,
                -l1 * sin(jointpos[6]) - l3 * cos(jointpos[6]) * cos(jointpos[7] + jointpos[8]) - l2 * cos(jointpos[6]) * cos(jointpos[7])};
+
       iPb[0] = Fripb;
       iPb[1] = Flipb;
       iPb[2] = Rripb;
@@ -565,8 +567,12 @@ namespace Quad
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
           0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1;
-      X << 0, 0, 0.254, 0, 0, 0, 0.203, -0.142, -0.254, 0.203, 0.142, -0.254, -0.184, -0.142, -0.254, -0.184, 0.142, -0.254; // 初始状态 应接近 真实状态
-      P = Eigen::MatrixXf::Ones(18, 18);
+      X << 0, 0, 0.254, 0, 0, 0, 0.203, -0.142, 0, 0.203, 0.142, 0, -0.184, -0.142, 0, -0.184, 0.142, 0; // 初始状态 应接近 真实状态
+                                                                                                         // P = Eigen::MatrixXf::Ones(18, 18);
+      P.setZero();
+      P.block(0, 0, 3, 3) = 0.01f * Eigen::Matrix3f::Identity();
+      P.block(3, 3, 3, 3) = 0.1f * Eigen::Matrix3f::Identity();
+      P.block(6, 6, 12, 12) = 0.01f * Eigen::MatrixXf::Identity(12, 12);
       iden18 = Eigen::MatrixXf ::Identity(18, 18);
       Onemat << 1;
       Q.block(0, 0, 6, 6) = Eigen::MatrixXf::Identity(6, 6);
@@ -629,10 +635,10 @@ namespace Quad
     /// @brief 期望速度和角速度
     float dVxb = 0.0, dVyb = 0.0, dWzb = 0, dWzO = 0;
     float dFaiz, dHb = 0.29, dFaix, dFaiy;
-    Eigen::MatrixXf dVb(3, 1);
-    Eigen::MatrixXf dVO(3, 1);
-    Eigen::MatrixXf dWb(3, 1);
-    Eigen::MatrixXf dWO(3, 1);
+    Eigen::Vector3f dVb;
+    Eigen::Vector3f dVO;
+    Eigen::Vector3f dWb;
+    Eigen::Vector3f dWO;
     Eigen::Matrix3f TFZ;
     Eigen::Vector3f dPO;
     Eigen::MatrixXf W(4, 3);
@@ -683,7 +689,7 @@ namespace Quad
 
       xbox_close(xbox_fd);
     }
-
+    Eigen::Vector3f lock_p;
     void Keyboard_init()
     {
       A.setZero();
@@ -695,19 +701,29 @@ namespace Quad
       // dPO = {0, 0, 0.29};
       dFaiz = KF::Faiz; // 用当前偏航角初始 目标偏航角
       dWzO = dWzb;
+      lock_p = KF::pcom;
     }
     float clip(float value, float min, float max)
     {
       return value < min ? min : (value > max ? max : value);
     }
     bool Lock_state = true;
-    Eigen::Vector3f lock_p;
+
     void Desire_ins_update(float MPCtime) // 这个仅能根据当前状态 估计下一次状态  ， 但是需要估计未来多个时间段的状态
     {
 
-      dVyb = clip(((float)-map.lx) / 32767.0f, -1.f, 1.f);
-      dVxb = clip(((float)-map.ly) / 32767.0f * 1.5f, -1.5f, 1.5f);
-      dWzb = clip(((float)-map.rx) / 32767.0f, -1.f, 1.f);
+      float dy = clip(((float)-map.lx) / 32767.0f, -1.f, 1.f);
+      float dx = clip(((float)-map.ly) / 32767.0f, -1.f, 1.f);
+      float dz = clip(((float)-map.lt) / 32767.0f, -1.f, 1.f);
+      dVxb = 0.7 * dVxb + 0.3 * dx;
+      dVyb = 0.7 * dVyb + 0.3 * dy;
+      dWzb = 0.7 * dWzb + 0.3 * dz;
+      if (dVxb < 0.001f)
+        dVxb = 0;
+      if (dVyb < 0.001f)
+        dVyb = 0;
+      if (dWzb < 0.001f)
+        dWzb = 0;
       std::cout << "dVxb-->" << dVxb << std::endl;
       std::cout << "dVyb-->" << dVyb << std::endl;
       std::cout << "dWzb-->" << dWzb << std::endl;
@@ -749,11 +765,23 @@ namespace Quad
               1, Gait::FlPstend[0], Gait::FlPstend[1],
               1, Gait::RrPstend[0], Gait::RrPstend[1],
               1, Gait::RlPstend[0], Gait::RlPstend[1];
+          Eigen::Matrix3f WtW = W.transpose() * W;
+          float det = WtW.determinant();
+          if (det > 1e-8f)
+          {
+            Eigen::Vector3f A_new = WtW.inverse() * W.transpose() * Z;
+            A = 0.2f * A_new + 0.8f * _A;
+          }
+          else
+          {
+            A = _A; // 保留上一帧，不更新
+          }
           _A = A;
-          // 可能有错
-          A = (W.transpose() * W).inverse() * W.transpose() * Z;
-          // A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
-          A = 0.2 * A + 0.8 * _A; // 低通滤波
+          // _A = A;
+          // // 可能有错
+          // A = (W.transpose() * W).inverse() * W.transpose() * Z;
+          // // A = (W.transpose() * ((W * W.transpose()).inverse())) * Z;
+          // A = 0.2 * A + 0.8 * _A; // 低通滤波
           N << -A[1], -A[2], 1;
           // 归一化的法向量
           N_ = N * (1.0f / pow((pow(N[0], 2) + pow(N[1], 2) + 1), 0.5));
@@ -776,8 +804,8 @@ namespace Quad
         dVO = TFZ * dVb;
 
         dPO = dPO + dVO * MPCtime;
-        // if (FSM::currentState == FSM::FSMstate::stand)
-        //   dPO = lock_p;
+        if (FSM::currentState == FSM::FSMstate::stand)
+          dPO = lock_p;
         // 计算期望滚摆角
         dPO[2] = dHb; // 期望机身高度
         Tao = TFZ.inverse() * N_;
@@ -815,7 +843,7 @@ namespace Quad
     int n_st = 0;                // 当前支撑腿数量
 
     float Fmax = 250.0f;
-    float fri = 0.33f; // 摩擦系数
+    float fri = 0.4f; // 摩擦系数
     Eigen::Vector4f MPCsFai;
 
     // 使用全局静态指针管理求解器，杜绝内存反复分配
@@ -1999,7 +2027,7 @@ namespace Quad
 
         float torque_limit = 23.7f;
         if (i % 3 == 2)
-          torque_limit = 45.43f; // 小腿 (Knee) 电机的扭矩更大
+          torque_limit = 35.55f; // 小腿 (Knee) 电机的扭矩更大
 
         if (tau_cmd > torque_limit)
           tau_cmd = torque_limit;
@@ -2017,10 +2045,11 @@ namespace Quad
     void System_Init(mjModel *model, mjData *data, float dt)
     {
 
-      //  初始化卡尔曼滤波与状态估计      KF::kf_Init(dt);
+      //  初始化卡尔曼滤波与状态估计
+      KF::kf_Init(dt);
       KF::joint_sensor_data_update(model, data);
       KF::B2WUpdate(model, data, "imu_quat"); // 请确保 xml 中 IMU 传感器名称一致
-
+      KF::Kfsolver();
       KeyboardIns::Keyboard_init();
       FSM::Init_FSM();
 
@@ -2097,12 +2126,14 @@ namespace Quad
 
       KF::joint_sensor_data_update(model, data);
       KF::B2WUpdate(model, data, "imu_quat");
+
       KF::FootUpdate();
+
       KF::Kfsolver();
+
       Gait::Pstend_Update();
       // // 2. 指令更新
       KeyboardIns::Desire_ins_update(MPC_T); // MPC_T 预测步长为 0.01s
-
       // // 3. 步态与轨迹规划 (怎么走)
       Gait::TimeUpdate();
       Gait::UpdateGait();

@@ -124,7 +124,7 @@ namespace Quad
     // 键盘发出的命令是相对 机器狗自身的
     extern float dVxb, dVyb, dWzb, dWzO;
     //  变成向量形式         在世界中的期望
-    extern Eigen::MatrixXf dVb, dVO, dWb, dWO;
+    extern Eigen::Vector3f dVb, dVO, dWb, dWO;
     extern float dFaiz, dHb, dFaix, dFaiy; //  期望偏航角  期望机身高度
     extern Eigen::Matrix3f TFZ;            // 关于Z的旋转矩阵
     extern Eigen::Vector3f dPO;            // 在世界坐标系中的期望质心位置
