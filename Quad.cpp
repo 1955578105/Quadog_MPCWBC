@@ -718,11 +718,11 @@ namespace Quad
       dVxb = 0.7 * dVxb + 0.3 * dx;
       dVyb = 0.7 * dVyb + 0.3 * dy;
       dWzb = 0.7 * dWzb + 0.3 * dz;
-      if (dVxb < 0.001f)
+      if (std::abs(dVxb) < 0.001f)
         dVxb = 0;
-      if (dVyb < 0.001f)
+      if (std::abs(dVyb) < 0.001f)
         dVyb = 0;
-      if (dWzb < 0.001f)
+      if (std::abs(dWzb) < 0.001f)
         dWzb = 0;
       std::cout << "dVxb-->" << dVxb << std::endl;
       std::cout << "dVyb-->" << dVyb << std::endl;
